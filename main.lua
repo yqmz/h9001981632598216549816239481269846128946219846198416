@@ -33,7 +33,7 @@ do
     setthreadidentity(7)
 end
 
-local Arvn = loadstring(game:HttpGet("https://raw.githubusercontent.com/koteqjjjj/arvn/main/arvn.lua"))()
+local Arvn = loadstring(game:HttpGet("https://raw.githubusercontent.com/zmpa/arvnlib/refs/heads/main/main.lua"))()
 
 local H = {}
 
@@ -1666,21 +1666,9 @@ do
     H.FlyConn = nil
     H.flyVelocityMock = Vector3.new(0, 0.03, 0)
 
-    function H.CleanupFlyObjects()
-        if H.FlyBV then pcall(function() H.FlyBV:Destroy() end) H.FlyBV = nil end
-        if H.FlyBG then pcall(function() H.FlyBG:Destroy() end) H.FlyBG = nil end
-    end
-
-    function H.FlyUsesPlatformStand()
-        local m = H.Flags.FlyMethod
-        if type(m) == "table" then m = m[1] end
-        return m == nil or m == "Platform Stand"
-    end
-
     function H.StopFly()
         H.FlyActive = false
         if H.FlyConn then H.FlyConn:Disconnect() H.FlyConn = nil end
-        H.CleanupFlyObjects()
         local char = LocalPlayer.Character
         if char then
             local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -1708,15 +1696,7 @@ do
         local char = LocalPlayer.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                pcall(function()
-                    if H.FlyUsesPlatformStand() then
-                        hum.PlatformStand = true
-                    else
-                        hum:ChangeState(Enum.HumanoidStateType.Physics)
-                    end
-                end)
-            end
+            if hum then pcall(function() hum.PlatformStand = true end) end
         end
         H.FlyConn = RunService.RenderStepped:Connect(function()
             if not H.Flags.FlyEnabled then return end
@@ -1726,14 +1706,7 @@ do
             if not hrp then return end
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
-                if H.FlyUsesPlatformStand() then
-                    if not hum.PlatformStand then hum.PlatformStand = true end
-                else
-                    if hum.PlatformStand then hum.PlatformStand = false end
-                    if hum:GetState() ~= Enum.HumanoidStateType.Physics then
-                        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
-                    end
-                end
+                if not hum.PlatformStand then hum.PlatformStand = true end
             end
             local moveDir = Vector3.zero
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + Camera.CFrame.LookVector end
@@ -1743,39 +1716,10 @@ do
             if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
             if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then moveDir = moveDir - Vector3.new(0, 1, 0) end
             local speed = (H.Flags.FlySpeed or 5) * 2
-            local method = H.Flags.FlyMethod
-            if type(method) == "table" then method = method[1] end
-            method = method or "Platform Stand"
-            local dir = moveDir.Magnitude > 0 and moveDir.Unit or Vector3.zero
-
-            if method ~= "BodyVelocity" then H.CleanupFlyObjects() end
-
-            if method == "Velocity" then
-                hrp.AssemblyLinearVelocity = dir * speed * 10
-            elseif method == "BodyVelocity" then
-                if not (H.FlyBV and H.FlyBV.Parent == hrp) then
-                    H.CleanupFlyObjects()
-                    H.FlyBV = Instance.new("BodyVelocity")
-                    H.FlyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-                    H.FlyBV.Parent = hrp
-                    H.FlyBG = Instance.new("BodyGyro")
-                    H.FlyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-                    H.FlyBG.P = 9e4
-                    H.FlyBG.Parent = hrp
-                end
-                H.FlyBV.Velocity = dir * speed * 10
-                H.FlyBG.CFrame = Camera.CFrame
-            elseif method == "Hover" then
-                local target = dir * speed * 10
-                local cur = hrp.AssemblyLinearVelocity
-                hrp.AssemblyLinearVelocity = cur:Lerp(target, 0.15) + Vector3.new(0, workspace.Gravity * 0.016, 0)
-            else
-                -- "Platform Stand" and "CFrame" both move by CFrame with a spoofed velocity
-                if moveDir.Magnitude > 0 then
-                    hrp.CFrame = hrp.CFrame + (dir * (speed / 5))
-                end
-                hrp.Velocity = H.flyVelocityMock
+            if moveDir.Magnitude > 0 then
+                hrp.CFrame = hrp.CFrame + (moveDir.Unit * (speed / 5))
             end
+            hrp.Velocity = H.flyVelocityMock
         end)
     end
 
@@ -3846,14 +3790,6 @@ do
                 end
             end,
         })
-        FlySection:Dropdown({ Name = "Fly Method", Flag = "FlyMethod", Values = {"Platform Stand", "CFrame", "Velocity", "BodyVelocity", "Hover"}, Default = "Platform Stand", Callback = function(v)
-            if type(v) == "table" then v = v[1] end
-            H_.Flags.FlyMethod = v
-            if H_.Flags.FlyEnabled then
-                H_.StopFly()
-                H_.StartFly()
-            end
-        end })
         FlySection:Slider({ Name = "Fly Speed", Flag = "FlySpeed", Min = 1, Max = 50, Default = 5, Callback = function(v) H_.Flags.FlySpeed = v end })
 
         local VoidLoopSection = MoveTab:Section("Void Loop")
