@@ -1393,6 +1393,30 @@ do
                                     local maxHp = math.max(hum.MaxHealth, 1)
                                     local pct = math.clamp(hp / maxHp, 0, 1)
 
+                                    -- with 3D boxes, anchor the name/health/distance/tool labels to the 3D box's screen bounds
+                                    if H.Flags.ESPBoxType == "3D" then
+                                        local cf = hrp.CFrame
+                                        local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+                                        for _, sx in ipairs({-1, 1}) do
+                                            for _, sy in ipairs({-1, 1}) do
+                                                for _, sz in ipairs({-1, 1}) do
+                                                    local sp = H.WorldToScreen((cf * CFrame.new(sx * 2, sy * 2.75 - 0.25, sz * 1)).Position)
+                                                    if sp.X < minX then minX = sp.X end
+                                                    if sp.X > maxX then maxX = sp.X end
+                                                    if sp.Y < minY then minY = sp.Y end
+                                                    if sp.Y > maxY then maxY = sp.Y end
+                                                end
+                                            end
+                                        end
+                                        if H.IsFinite(minX) and H.IsFinite(maxX) and H.IsFinite(minY) and H.IsFinite(maxY) then
+                                            local cx = (minX + maxX) / 2
+                                            boxW = maxX - minX
+                                            boxH = maxY - minY
+                                            boxTopY = minY
+                                            topPos = Vector2.new(cx, minY)
+                                            pos = Vector2.new(cx, pos.Y)
+                                        end
+                                    end
                                     if H.HAS_DRAWING and obj.box then
                                         if H.Flags.ESPBoxType == "2D" and H.IsFinite(boxH) and boxH > 0 and boxH < 5000 then
                                             obj.box.Size = Vector2.new(boxW, boxH)
