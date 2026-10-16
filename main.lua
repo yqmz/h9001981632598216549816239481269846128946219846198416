@@ -4284,6 +4284,116 @@ do
         TracerSection:Dropdown({ Name = "Type", Flag = "ESPTracerType", Values = {"Off", "Straight", "Arc"}, Default = "Off", Callback = function(v) H_.Flags.ESPTracerType = v end })
         TracerSection:Dropdown({ Name = "Origin", Flag = "ESPTracerOrigin", Values = {"Cursor", "Bottom", "Center"}, Default = "Bottom", Callback = function(v) H_.Flags.ESPTracerOrigin = v end })
         TracerSection:ColorPicker({ Name = "Color", Flag = "ESPTracerColor", Default = Color3.fromRGB(180, 190, 235) })
+
+        -- Custom crosshair drawn with the Drawing API
+        local CrossSection = VisualTab:Section({ Name = "Crosshair", Side = "Left" })
+        CrossSection:Toggle({ Name = "Custom Crosshair", Flag = "CrosshairEnabled", Default = false, Callback = function(v) H_.Flags.CrosshairEnabled = v end })
+        CrossSection:Dropdown({ Name = "Style", Flag = "CrosshairStyle", Values = {"Image Only", "Cross", "Dot", "Circle", "Cross + Dot", "X"}, Default = "Image Only", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.CrosshairStyle = v end })
+        CrossSection:Slider({ Name = "Size", Flag = "CrosshairSize", Min = 2, Max = 60, Default = 10, Callback = function(v) H_.Flags.CrosshairSize = v end })
+        CrossSection:Slider({ Name = "Gap", Flag = "CrosshairGap", Min = 0, Max = 30, Default = 4, Callback = function(v) H_.Flags.CrosshairGap = v end })
+        CrossSection:Slider({ Name = "Thickness", Flag = "CrosshairThickness", Min = 1, Max = 6, Default = 1, Callback = function(v) H_.Flags.CrosshairThickness = v end })
+        CrossSection:Toggle({ Name = "Spin", Flag = "CrosshairSpin", Default = false, Callback = function(v) H_.Flags.CrosshairSpin = v end })
+        CrossSection:Toggle({ Name = "Follow Mouse", Flag = "CrosshairFollowMouse", Default = false, Callback = function(v) H_.Flags.CrosshairFollowMouse = v end })
+        CrossSection:ColorPicker({ Name = "Color", Flag = "CrosshairColor", Default = Color3.fromRGB(255, 255, 255) })
+
+        -- Force the game's own cursor/crosshair to the script's image while enabled
+        do
+            local CROSSHAIR_ID = "rbxassetid://94643450"
+            local mouse = LocalPlayer:GetMouse()
+            local savedIcon
+            local function forceImage()
+                if mouse.Icon ~= CROSSHAIR_ID then
+                    if savedIcon == nil then savedIcon = mouse.Icon end
+                    pcall(function() mouse.Icon = CROSSHAIR_ID end)
+                end
+                local gui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                if gui then
+                    for _, d in ipairs(gui:GetDescendants()) do
+                        if d:IsA("ImageLabel") and d.Visible then
+                            local n = string.lower(d.Name)
+                            if n == "aim" or n == "crosshair" or n == "reticle" then
+                                if d.Image ~= CROSSHAIR_ID then pcall(function() d.Image = CROSSHAIR_ID end) end
+                            end
+                        end
+                    end
+                end
+            end
+            local lastScan = 0
+            H_.RunService.RenderStepped:Connect(function()
+                if H_.Flags.CrosshairEnabled then
+                    -- the GUI scan is heavier, so run it a few times a second; the mouse icon is checked every frame
+                    if tick() - lastScan > 0.25 then
+                        lastScan = tick()
+                        forceImage()
+                    elseif mouse.Icon ~= CROSSHAIR_ID then
+                        if savedIcon == nil then savedIcon = mouse.Icon end
+                        pcall(function() mouse.Icon = CROSSHAIR_ID end)
+                    end
+                elseif savedIcon ~= nil then
+                    pcall(function() mouse.Icon = savedIcon end)
+                    savedIcon = nil
+                end
+            end)
+        end
+
+        if H_.HAS_DRAWING then
+            local lines, dot, ring = {}, Drawing.new("Circle"), Drawing.new("Circle")
+            for i = 1, 4 do
+                local l = Drawing.new("Line")
+                l.Visible = false
+                lines[i] = l
+            end
+            dot.Filled = true dot.Visible = false dot.NumSides = 24
+            ring.Filled = false ring.Visible = false ring.NumSides = 48
+            local angle = 0
+            local function hideAll()
+                for _, l in ipairs(lines) do l.Visible = false end
+                dot.Visible = false
+                ring.Visible = false
+            end
+            H_.RunService.RenderStepped:Connect(function(dt)
+                if not H_.Flags.CrosshairEnabled then
+                    if lines[1].Visible or dot.Visible or ring.Visible then hideAll() end
+                    return
+                end
+                local style = H_.Flags.CrosshairStyle or "Cross"
+                local size = H_.Flags.CrosshairSize or 10
+                local gap = H_.Flags.CrosshairGap or 4
+                local thick = H_.Flags.CrosshairThickness or 1
+                local col = H_.NormalizeColor(H_.Flags.CrosshairColor, Color3.new(1, 1, 1))
+                local center = H_.Flags.CrosshairFollowMouse and H_.UserInputService:GetMouseLocation() or (workspace.CurrentCamera.ViewportSize / 2)
+                if H_.Flags.CrosshairSpin then angle = angle + dt * 3 else angle = 0 end
+                hideAll()
+
+                local function setArms(rot)
+                    for i = 1, 4 do
+                        local a = rot + (i - 1) * math.pi / 2
+                        local dir = Vector2.new(math.cos(a), math.sin(a))
+                        local l = lines[i]
+                        l.From = center + dir * gap
+                        l.To = center + dir * (gap + size)
+                        l.Color = col
+                        l.Thickness = thick
+                        l.Visible = true
+                    end
+                end
+                if style == "Cross" or style == "Cross + Dot" then setArms(angle) end
+                if style == "X" then setArms(angle + math.pi / 4) end
+                if style == "Dot" or style == "Cross + Dot" then
+                    dot.Position = center
+                    dot.Radius = math.max(1, thick)
+                    dot.Color = col
+                    dot.Visible = true
+                end
+                if style == "Circle" then
+                    ring.Position = center
+                    ring.Radius = size
+                    ring.Thickness = thick
+                    ring.Color = col
+                    ring.Visible = true
+                end
+            end)
+        end
     end
 
     do
