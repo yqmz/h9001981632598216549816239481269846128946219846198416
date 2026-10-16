@@ -4781,6 +4781,125 @@ do
                 end
             end,
         })
+
+        -- Name spoof: client-side only; rewrites your name in the leaderboard, Roblox menu/chat and game GUIs
+        local NameSpoofSection = PlayersTab:Section({ Name = "Name Spoof", Side = "Right" })
+        H_.Flags.NameSpoofText = H_.Flags.NameSpoofText or ""
+        local touched = setmetatable({}, { __mode = "k" })
+        local origDisplay
+        local function plain(s) return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")) end
+        local function rewrite(text, from, to)
+            if from == "" then return text end
+            return (text:gsub(plain(from), (to:gsub("%%", "%%%%"))))
+        end
+        local function spoofRoots()
+            local roots = {}
+            local gui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if gui then table.insert(roots, gui) end
+            local cg = game:GetService("CoreGui")
+            for _, n in ipairs({ "RobloxGui", "PlayerList", "TopBarApp", "ExperienceChat", "Chat", "BubbleChat" }) do
+                local r = cg:FindFirstChild(n)
+                if r then table.insert(roots, r) end
+            end
+            return roots
+        end
+        -- labels are cached once and then checked a few per frame, so there's no full GUI scan
+        local labels, inSet, rootConns, rootSet = {}, setmetatable({}, { __mode = "k" }), {}, {}
+        local cursor, lastRootScan = 1, 0
+        local function track(d)
+            if (d:IsA("TextLabel") or d:IsA("TextButton")) and not inSet[d] then
+                inSet[d] = true
+                labels[#labels + 1] = d
+            end
+        end
+        local function refreshRoots()
+            for _, root in ipairs(spoofRoots()) do
+                if not rootSet[root] then
+                    rootSet[root] = true
+                    table.insert(rootConns, root.DescendantAdded:Connect(track))
+                    task.spawn(function()
+                        local n = 0
+                        for _, d in ipairs(root:GetDescendants()) do
+                            track(d)
+                            n = n + 1
+                            if n % 300 == 0 then task.wait() end
+                        end
+                    end)
+                end
+            end
+        end
+        local function stepLabels()
+            local spoof = H_.Flags.NameSpoofText
+            if type(spoof) ~= "string" or spoof == "" then return end
+            local realName, realDisplay = LocalPlayer.Name, LocalPlayer.DisplayName
+            for _ = 1, 40 do
+                local d = labels[cursor]
+                if not d then cursor = 1 break end
+                if not d.Parent then
+                    labels[cursor] = labels[#labels]
+                    labels[#labels] = nil
+                    inSet[d] = nil
+                    touched[d] = nil
+                else
+                    cursor = cursor + 1
+                    local t = d.Text
+                    if t ~= "" and not t:find(spoof, 1, true) and (t:find(realName, 1, true) or t:find(realDisplay, 1, true)) then
+                        local n = rewrite(rewrite(t, realName, spoof), realDisplay, spoof)
+                        if n ~= t then
+                            touched[d] = true
+                            d.Text = n
+                        end
+                    end
+                end
+            end
+        end
+        local function applySpoof()
+            local spoof = H_.Flags.NameSpoofText
+            if type(spoof) ~= "string" or spoof == "" then return end
+            if tick() - lastRootScan > 3 then
+                lastRootScan = tick()
+                refreshRoots()
+            end
+            local hum = H_.GetHum()
+            if hum then
+                if origDisplay == nil then origDisplay = hum.DisplayName end
+                if hum.DisplayName ~= spoof then pcall(function() hum.DisplayName = spoof end) end
+            end
+        end
+        H_.RunService.Heartbeat:Connect(function()
+            if H_.Flags.NameSpoofEnabled then pcall(stepLabels) end
+        end)
+        local function restoreSpoof(spoof)
+            local realName = LocalPlayer.Name
+            for d in pairs(touched) do
+                pcall(function()
+                    if d.Parent and spoof ~= "" then d.Text = rewrite(d.Text, spoof, realName) end
+                end)
+                touched[d] = nil
+            end
+            local hum = H_.GetHum()
+            if hum and origDisplay then pcall(function() hum.DisplayName = origDisplay end) end
+            origDisplay = nil
+        end
+        local appliedSpoof = ""
+        task.spawn(function()
+            while true do
+                if H_.Flags.NameSpoofEnabled then
+                    local spoof = H_.Flags.NameSpoofText
+                    if type(spoof) == "string" and appliedSpoof ~= "" and spoof ~= appliedSpoof then
+                        restoreSpoof(appliedSpoof)
+                    end
+                    appliedSpoof = (type(spoof) == "string") and spoof or ""
+                    pcall(applySpoof)
+                elseif appliedSpoof ~= "" then
+                    restoreSpoof(appliedSpoof)
+                    appliedSpoof = ""
+                end
+                task.wait(0.4)
+            end
+        end)
+        NameSpoofSection:Toggle({ Name = "Name Spoof", Flag = "NameSpoofEnabled", Default = false, Callback = function(v) H_.Flags.NameSpoofEnabled = v end })
+        NameSpoofSection:Input({ Name = "Spoofed Name", Flag = "NameSpoofText", Placeholder = "Enter a name", Default = "", Callback = function(v) H_.Flags.NameSpoofText = v end })
     end
 
     do
