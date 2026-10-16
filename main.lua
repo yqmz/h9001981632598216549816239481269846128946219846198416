@@ -55,6 +55,7 @@ do
     H.Flags.NoSpread           = H.Flags.NoSpread or false
     H.Flags.OrbitEnabled       = H.Flags.OrbitEnabled or false
     H.Flags.SilentAimHitChance = H.Flags.SilentAimHitChance or 100
+    H.Flags.Optimize           = H.Flags.Optimize or false
 
     H.RageMethod = "Method 2"
 
@@ -2076,6 +2077,42 @@ do
         end)
     end
 
+    -- Optimize: strip post-processing + restore-able effect state
+    H.OptimizeSaved = nil
+
+    function H.ApplyOptimize(on)
+        local EFFECT_CLASSES = {
+            "BloomEffect", "BlurEffect", "SunRaysEffect",
+            "DepthOfFieldEffect", "ColorCorrectionEffect",
+            "ColorGradingEffect", "Atmosphere",
+        }
+        if on then
+            local saved = { effects = {}, shadows = H.Lighting.GlobalShadows }
+            for _, obj in ipairs(H.Lighting:GetChildren()) do
+                for _, cls in ipairs(EFFECT_CLASSES) do
+                    if obj:IsA(cls) then
+                        saved.effects[obj] = obj.Enabled
+                        pcall(function() obj.Enabled = false end)
+                        break
+                    end
+                end
+            end
+            H.OptimizeSaved = saved
+            pcall(function() H.Lighting.GlobalShadows = false end)
+        else
+            local saved = H.OptimizeSaved
+            if saved then
+                for obj, state in pairs(saved.effects) do
+                    if obj.Parent then pcall(function() obj.Enabled = state end) end
+                end
+                if saved.shadows ~= nil then
+                    pcall(function() H.Lighting.GlobalShadows = saved.shadows end)
+                end
+                H.OptimizeSaved = nil
+            end
+        end
+    end
+
     function H.ApplyFullbright()
         if H.Flags.Fullbright then
             H.Lighting.Brightness = 2
@@ -3571,6 +3608,8 @@ do
         H.Flags.RageSpectate = false
         H.Flags.VoidLoop = false
         H.Flags.OrbitEnabled = false
+        H.Flags.Optimize = false
+        pcall(H.ApplyOptimize, false)
         pcall(H.StopOrbit)
         H.Flags.FollowEnabled = false
         if H.StopFollow then pcall(H.StopFollow) end
@@ -4173,6 +4212,22 @@ do
 
     do
         local VisualTab = Group:Tab({ Name = "Visuals / ESP", Icon = "eye" })
+
+        local OptimizeSection = VisualTab:Section({ Name = "Optimize", Side = "Left" })
+        OptimizeSection:Toggle({
+            Name = "Optimize (kill effects)",
+            Flag = "Optimize",
+            Default = false,
+            Callback = function(v)
+                H_.Flags.Optimize = v
+                pcall(H_.ApplyOptimize, v)
+            end,
+        })
+        OptimizeSection:Paragraph({
+            Title = "Note",
+            Content = "Disables post-processing (Bloom, Blur, DOF, SunRays, ColorCorrection, Atmosphere, shadows) and turns off bullet tracers and gun chams for FPS.",
+        })
+
         local TracerSection = VisualTab:Section({ Name = "Bullet Tracers", Side = "Right" })
         TracerSection:Toggle({ Name = "Bullet Tracers", Flag = "BulletTracers", Default = false, Callback = function(v) H_.Flags.BulletTracers = v end })
         TracerSection:ColorPicker({ Name = "Tracer Color", Flag = "BulletTracerColor", Default = Color3.fromRGB(255, 80, 80) })
@@ -4222,7 +4277,7 @@ do
         end
         -- Hide the game's own bullet visuals so only the custom tracer shows
         local function hideGameBullet(obj)
-            if not H_.Flags.BulletTracers then return end
+            if not H_.Flags.BulletTracers or H_.Flags.Optimize then return end
             local name = obj.Name:lower()
             local byName = name == "gunbeam" or name:find("pellet") or name == "bullet"
             local byShot = os.clock() - lastShot < 0.75 and (obj:IsA("Beam") or obj:IsA("Trail"))
@@ -4394,7 +4449,7 @@ do
         if hookmetamethod and newcclosure and getnamecallmethod then
             local oldNamecall
             oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-                if H_.Flags.BulletTracers and getnamecallmethod() == "FireServer" and not checkcaller()
+                if H_.Flags.BulletTracers and not H_.Flags.Optimize and getnamecallmethod() == "FireServer" and not checkcaller()
                     and typeof(self) == "Instance" and self.Name == "MainRemoteEvent" then
                     local kind, handle, origin, pellets, aim = ...
                     if kind == "ShootGun" then
@@ -4508,7 +4563,7 @@ do
         end
         local chamsWasOn = false
         H_.RunService.RenderStepped:Connect(function()
-            if H_.Flags.SelfChams or H_.Flags.GunChams then
+            if (H_.Flags.SelfChams or H_.Flags.GunChams) and not H_.Flags.Optimize then
                 chamsWasOn = true
                 pcall(applyChams)
             elseif chamsWasOn or next(chamsOriginals) ~= nil or chamsHighlight then
@@ -5967,5 +6022,5 @@ do
         end)
     end)
 
-    Arvn:Notify({ Title = "houhou", Content = "(discord.gg/feuds)", Kind = "uwu" })
+    Arvn:Notify({ Title = "houhou", Content = "(https://discord.gg/Tddht8WW8Y)", Kind = "uwu" })
 end
