@@ -4402,6 +4402,11 @@ do
                     and self:IsA("Humanoid") then
                     return
                 end
+                -- no jump cooldown: refuse the game's attempts to zero the jump after repeated jumps
+                if H_.Flags.NoJumpCooldown and not checkcaller() and typeof(self) == "Instance" and self:IsA("Humanoid")
+                    and (key == "JumpPower" or key == "JumpHeight") and value == 0 then
+                    return
+                end
                 return oldNewIndex(self, key, value)
             end))
         end
@@ -4445,6 +4450,44 @@ do
             H_.Flags.JumpPowerValue = v
             if H_.Flags.JumpPowerEnabled then applyJump() end
         end })
+
+        -- No Jump Cooldown: keep the jump state enabled, undo cooldown zeroing, and force a jump if the game swallowed it
+        H_.RunService.Heartbeat:Connect(function()
+            if not H_.Flags.NoJumpCooldown then return end
+            local hum = H_.GetHum()
+            if not hum or hum.Health <= 0 then return end
+            pcall(function()
+                hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+                if not H_.Flags.JumpPowerEnabled then
+                    if hum.UseJumpPower and hum.JumpPower == 0 then hum.JumpPower = 50 end
+                    if not hum.UseJumpPower and hum.JumpHeight == 0 then hum.JumpHeight = 7.2 end
+                end
+                local be = (workspace:FindFirstChild("Players") and workspace.Players:FindFirstChild(LocalPlayer.Name) and workspace.Players[LocalPlayer.Name]:FindFirstChild("BodyEffects"))
+                if be then
+                    for _, v in ipairs(be:GetChildren()) do
+                        if string.find(string.lower(v.Name), "jump", 1, true) then
+                            if v:IsA("BoolValue") then v.Value = false
+                            elseif v:IsA("NumberValue") or v:IsA("IntValue") then v.Value = 0 end
+                        end
+                    end
+                end
+            end)
+        end)
+        H_.UserInputService.JumpRequest:Connect(function()
+            if not H_.Flags.NoJumpCooldown then return end
+            local hum, root = H_.GetHum(), H_.GetHRP()
+            if not hum or not root or hum.Health <= 0 or hum.FloorMaterial == Enum.Material.Air then return end
+            task.defer(function()
+                -- if the game blocked the jump, launch manually
+                task.wait()
+                if hum.Parent and root.Parent and hum.FloorMaterial ~= Enum.Material.Air and root.AssemblyLinearVelocity.Y < 5 then
+                    local p = H_.Flags.JumpPowerEnabled and H_.Flags.JumpPowerValue or ((hum.UseJumpPower and hum.JumpPower > 0) and hum.JumpPower or 50)
+                    local v = root.AssemblyLinearVelocity
+                    root.AssemblyLinearVelocity = Vector3.new(v.X, p, v.Z)
+                end
+            end)
+        end)
+        JumpSection:Toggle({ Name = "No Jump Cooldown", Flag = "NoJumpCooldown", Default = false, Callback = function(v) H_.Flags.NoJumpCooldown = v end })
 
         local FlySection = MoveTab:Section("Fly")
         FlySection:Toggle({
@@ -4915,6 +4958,56 @@ do
         MiscSection:Toggle({ Name = "AutoArmor", Flag = "AutoArmor", Default = false, Callback = function(v) H_.Flags.AutoArmor = v end })
         MiscSection:Toggle({ Name = "AutoStim", Flag = "AutoStim", Default = false, Callback = function(v) H_.Flags.AutoStim = v end })
         MiscSection:Toggle({ Name = "Anti AFK", Flag = "AntiAFK", Default = false, Callback = function(v) H_.Flags.AntiAFK = v H_.ApplyAntiAFK() end })
+
+        function H_.StopAntiAim()
+            if H_.AntiAimConn then H_.AntiAimConn:Disconnect() H_.AntiAimConn = nil end
+            local hum = H_.GetHum()
+            if hum then pcall(function() hum.AutoRotate = true end) end
+        end
+        function H_.StartAntiAim()
+            H_.StopAntiAim()
+            local yaw, flip = 0, false
+            H_.AntiAimConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
+                if not H_.Flags.AntiAim then return H_.StopAntiAim() end
+                local hrp, hum = H_.GetHRP(), H_.GetHum()
+                if not hrp or not hum or hum.Health <= 0 then return end
+                -- other modules position the character themselves
+                if H_.RageTPQueue or H_.sentryVoided or H_.Flags.FollowEnabled or H_.Flags.OrbitEnabled then return end
+                local mode = H_.Flags.AntiAimMode or "Spin"
+                local speed = H_.Flags.AntiAimSpeed or 20
+                if mode == "Spin" then
+                    yaw = yaw + speed * dt
+                elseif mode == "Jitter" then
+                    flip = not flip
+                    yaw = flip and math.rad(90) or math.rad(-90)
+                elseif mode == "Random" then
+                    yaw = math.random() * math.pi * 2
+                elseif mode == "Backwards" then
+                    local nearest, nd = nil, math.huge
+                    for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
+                        local r = plr ~= LocalPlayer and H_.RageGetHRP(plr)
+                        if r then
+                            local d = (r.Position - hrp.Position).Magnitude
+                            if d < nd then nd = d nearest = r end
+                        end
+                    end
+                    if nearest then
+                        local v = nearest.Position - hrp.Position
+                        yaw = math.atan2(-v.X, -v.Z) + math.pi
+                    end
+                end
+                pcall(function()
+                    hum.AutoRotate = false
+                    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
+                end)
+            end)
+        end
+        MiscSection:Toggle({ Name = "Anti Aim", Flag = "AntiAim", Default = false, Callback = function(v)
+            H_.Flags.AntiAim = v
+            if v then H_.StartAntiAim() else H_.StopAntiAim() end
+        end })
+        MiscSection:Dropdown({ Name = "Anti Aim Mode", Flag = "AntiAimMode", Values = {"Spin", "Jitter", "Random", "Backwards"}, Default = "Spin", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.AntiAimMode = v end })
+        MiscSection:Slider({ Name = "Anti Aim Spin Speed", Flag = "AntiAimSpeed", Min = 1, Max = 60, Default = 20, Callback = function(v) H_.Flags.AntiAimSpeed = v end })
         MiscSection:Toggle({ Name = "Anti Stomp", Flag = "AntiStomp", Default = true, Callback = function(v) H_.Flags.AntiStomp = v end })
         local DesyncHook
         MiscSection:Toggle({ Name = "Desync", Flag = "Desync", Default = false, Callback = function(v)
