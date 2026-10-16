@@ -872,7 +872,6 @@ do
                     end
                 end
 
-                -- sentry redirect takes priority over normal silent aim
                 if sentryPart then part = sentryPart end
                 if a[1] == "UpdateMousePosI2" or a[1] == "UpdateMousePosI" or a[1] == "UpdateMousePos" then
                     if part then
@@ -944,7 +943,6 @@ do
                         return oldNC(self, table.unpack(a))
                     end
 
-                    -- single-bullet guns (revolver etc.): ShootGun, handle, origin, nil, aimPos, hitPart, normal, range, damage, result1
                     if typeof(a[3]) == "Vector3" and a[4] == nil and typeof(a[5]) == "Vector3" then
                         if part then
                             local hitPos = part.Position
@@ -1394,7 +1392,6 @@ do
                                     local maxHp = math.max(hum.MaxHealth, 1)
                                     local pct = math.clamp(hp / maxHp, 0, 1)
 
-                                    -- with 3D boxes, anchor the name/health/distance/tool labels to the 3D box's screen bounds
                                     if H.Flags.ESPBoxType == "3D" then
                                         local cf = hrp.CFrame
                                         local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
@@ -1721,7 +1718,6 @@ do
             if hum then
                 hum.PlatformStand = false
                 pcall(function() hum:ChangeState(Enum.HumanoidStateType.Freefall) end)
-                -- re-assert next frame so the state sticks after PlatformStand clears
                 task.defer(function()
                     if not H.FlyActive and hum.Parent then
                         pcall(function() hum:ChangeState(Enum.HumanoidStateType.Freefall) end)
@@ -2648,7 +2644,6 @@ do
 
     function H.TriggerReloadTool(tool)
         if not tool then return false end
-        -- Auto Kill's "Auto Reload" toggle; Sentry and Auto Fight keep reloading regardless
         if H.Flags.RageAutoKill and H.Flags.RageAutoReload == false and not H.Flags.AutoFight and not H.sentryEngaged then
             return false
         end
@@ -2880,7 +2875,6 @@ do
         end
     end
 
-    -- platform-stand flight at high speed to the target, stomp, then drop
     function H.RageTickTPLock()
         local lock = H.RageTPQueue
         if not lock then return end
@@ -2908,7 +2902,6 @@ do
         end)
         if not arrived then return end
         lock.arrivedAt = lock.arrivedAt or now
-        -- the ragdoll keeps sliding after the KO, so keep following it and re-stomp until it dies or time runs out
         if not lock.lastStomp or now - lock.lastStomp >= 0.1 then
             lock.lastStomp = now
             local char = lock.plr.Character
@@ -3058,7 +3051,6 @@ do
         return tool
     end
 
-    -- Shot detector: other players' gun fire shows up as Ammo dropping, a gun sound, or BodyEffects.GunFiring
     H.sentryShotHits = {}
     do
         local watched = setmetatable({}, { __mode = "k" })
@@ -3106,7 +3098,6 @@ do
         H.AddConn(Players.PlayerAdded:Connect(watchPlayer))
     end
 
-    -- Weighted score: recent shot, aim position near me, facing me, line of sight
     function H.GuessSentryAttacker()
         local myHRP = H.GetHRP()
         if not myHRP then return nil end
@@ -3205,7 +3196,6 @@ do
         end)
     end
 
-    -- reload every sentry gun; each is equipped briefly since the game only reloads held tools
     function H.SentryReloadAll()
         local hum = H.GetHum()
         if not hum then return end
@@ -3221,7 +3211,6 @@ do
         if prev and prev.Parent and hum.Parent and not (H.AutoBuy and H.AutoBuy.isBusy()) then pcall(function() hum:EquipTool(prev) end) end
     end
 
-    -- after the attacker is dealt with, restock armor then reload
     function H.SentryFinish()
         if not H.sentryEngaged then return end
         H.sentryEngaged = false
@@ -3546,9 +3535,7 @@ do
     end)()
 end
 
--- ============================================================
--- [BULLET TP] standalone GunHandler aimbot, wired to a toggle
--- ============================================================
+
 do
     local Players = H.Players
     local RS      = H.ReplicatedStorage
@@ -3570,7 +3557,6 @@ do
     local origGetAim, origTrace, origShoot
     local inHook = false
 
-    -- drop hooks left behind by a previous execution of this script
     if getgenv().__WB_OLDNC then
         pcall(function() hookmetamethod(game, "__namecall", getgenv().__WB_OLDNC) end)
         getgenv().__WB_OLDNC = nil
@@ -3802,7 +3788,6 @@ do
         if H.StopFollow then pcall(H.StopFollow) end
         H.Flags.AutoFight = false
         if H.StopAutoFight then pcall(H.StopAutoFight) end
-        -- [BULLET TP] tear the GunHandler hooks down on panic
         H.Flags.WBAimbotEnabled = false
         if H.WB_CFG and H.WB_CFG.Enabled then pcall(H.WBSetEnabled, false) end
         H.RageTargets = {}
@@ -3901,7 +3886,6 @@ do
         SilentSection:Toggle({ Name = "Team Check", Flag = "SilentAimTeamCheck", Default = true, Callback = function(v) H_.Flags.SilentAimTeamCheck = v end })
         SilentSection:Toggle({ Name = "No Spread", Flag = "NoSpread", Default = false, Callback = function(v) H_.Flags.NoSpread = v end })
 
-        -- [BULLET TP]
         local BulletTPSection = SilentTab:Section({ Name = "Bullet TP", Side = "Right" })
         BulletTPSection:Toggle({
             Name = "Bullet TP",
@@ -3944,7 +3928,6 @@ do
         OrbitMain:Slider({ Name = "Chaos", Flag = "OrbitChaos", Min = 0, Max = 100, Default = 70, Callback = function(v) H_.Flags.OrbitChaos = v end })
         OrbitMain:Toggle({ Name = "Noclip", Flag = "OrbitNoclip", Default = true, Callback = function(v) H_.Flags.OrbitNoclip = v end })
 
-        -- Follow: stay ahead of the first orbit target along its movement direction and shoot with pellet redirect
         function H_.StopFollow(keepHome)
             if H_.FollowConn then H_.FollowConn:Disconnect() H_.FollowConn = nil end
             H_.followRedirectPart = nil
@@ -4028,7 +4011,6 @@ do
         FollowSec:Slider({ Name = "Follow Height", Flag = "FollowHeight", Min = -10, Max = 20, Default = 0, Callback = function(v) H_.Flags.FollowHeight = v end })
         FollowSec:Toggle({ Name = "Follow Shoot", Flag = "FollowShoot", Default = true, Callback = function(v) H_.Flags.FollowShoot = v end })
 
-        -- Auto Fight: sit in the void, pop out next to a target, shoot until it's down, return to the void
         local fightGen = 0
         local fightHome
         local function fightSetPlatform(on)
@@ -4085,7 +4067,6 @@ do
                     local myHRP = H_.GetHRP()
                     if not myHRP then task.wait(0.2) else
 
-                    -- void phase: hold a far, high position for exactly Void Time
                     local ang = math.random() * math.pi * 2
                     local voidPos = Vector3.new(math.cos(ang) * 40000, 20000, math.sin(ang) * 40000)
                     fightSetPlatform(true)
@@ -4115,11 +4096,9 @@ do
 
                     local target = fightPickTarget()
                     if not target then
-                        -- stay in the void until the target is valid again
                     else
                     fightSetPlatform(false)
                     RS.Heartbeat:Wait()
-                    -- strike phase
                     local lastFire, shots = 0, 0
                     local startHp = math.huge
                     local orbAng, orbT = math.random() * math.pi * 2, tick()
@@ -4433,7 +4412,6 @@ do
         local lastReplicated = 0
         local spawnTracer
 
-        -- Read where a game bullet beam/part goes so the custom tracer can overlay the same path
         local function bulletEndpoints(obj)
             if obj:IsA("Beam") then
                 local a0, a1 = obj.Attachment0, obj.Attachment1
@@ -4465,17 +4443,14 @@ do
                 obj:GetPropertyChangedSignal(p):Connect(hide)
             end
         end
-        -- Hide the game's own bullet visuals so only the custom tracer shows
         local function hideGameBullet(obj)
             if not H_.Flags.BulletTracers then return end
             local name = obj.Name:lower()
             local byName = name == "gunbeam" or name:find("pellet") or name == "bullet"
             local byShot = os.clock() - lastShot < 0.75 and (obj:IsA("Beam") or obj:IsA("Trail"))
             if not (byName or byShot) then return end
-            -- only my own shots: bullets from other players must stay untouched
             if os.clock() - lastShot > 0.4 then return end
             task.defer(function()
-                -- Let the game finish positioning the bullet before reading its path
                 task.wait()
                 local list = { obj }
                 for _, d in ipairs(obj:GetDescendants()) do list[#list + 1] = d end
@@ -4554,7 +4529,6 @@ do
             local n = 24
             for i = 1, n do
                 local a, b = from:Lerp(to, (i - 1) / n), from:Lerp(to, i / n)
-                -- Tail fades quickly, head lingers
                 seg(a, b, w, color, life * (0.25 + 0.75 * i / n), 0.8 * (1 - i / n))
             end
         end
@@ -4635,7 +4609,6 @@ do
             local root = H_.GetHRP()
             return handle and handle.Position or (root and root.Position)
         end
-        -- Real shots are MainRemoteEvent:FireServer("ShootGun", handle, origin, pellets|nil, aimPos, ...)
         if hookmetamethod and newcclosure and getnamecallmethod then
             local oldNamecall
             oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -4659,7 +4632,6 @@ do
                             table.insert(targets, aim)
                         end
                         if from then
-                            -- Fallback: only draw from the remote if the game's own bullet wasn't replicated
                             task.delay(0.3, function()
                                 if lastReplicated >= lastShot then return end
                                 for _, t in ipairs(targets) do spawnTracer(from, t) end
@@ -4716,7 +4688,6 @@ do
                 if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and not chamsSkip[part]
                     and (not gunOnly or (tool and part:IsDescendantOf(tool))) then
                     if not chamsOriginals[part] then
-                        -- Leave parts that were invisible (hitboxes, helpers) untouched
                         if part.Transparency >= 0.95 then
                             chamsSkip[part] = true
                             continue
@@ -4761,7 +4732,6 @@ do
                 restoreChams()
             end
         end)
-        -- Physics resets collisions each step, so reapply before it runs
         H_.RunService.Stepped:Connect(function()
             if not H_.Flags.SelfChamsCollide then return end
             for part in pairs(chamsOriginals) do
@@ -4811,7 +4781,6 @@ do
         TracerSection:Dropdown({ Name = "Origin", Flag = "ESPTracerOrigin", Values = {"Cursor", "Bottom", "Center"}, Default = "Bottom", Callback = function(v) H_.Flags.ESPTracerOrigin = v end })
         TracerSection:ColorPicker({ Name = "Color", Flag = "ESPTracerColor", Default = Color3.fromRGB(180, 190, 235) })
 
-        -- Custom crosshair drawn with the Drawing API
         local CrossSection = VisualTab:Section({ Name = "Crosshair", Side = "Left" })
         CrossSection:Toggle({ Name = "Custom Crosshair", Flag = "CrosshairEnabled", Default = false, Callback = function(v) H_.Flags.CrosshairEnabled = v end })
         CrossSection:Dropdown({ Name = "Style", Flag = "CrosshairStyle", Values = {"Image Only", "Cross", "Dot", "Circle", "Cross + Dot", "X"}, Default = "Image Only", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.CrosshairStyle = v end })
@@ -4836,7 +4805,6 @@ do
             end,
         })
 
-        -- Force the game's own cursor/crosshair to the script's image while enabled
         do
             local CROSSHAIR_ID = "rbxassetid://94643450"
             local mouse = LocalPlayer:GetMouse()
@@ -4861,7 +4829,6 @@ do
             local lastScan = 0
             H_.RunService.RenderStepped:Connect(function()
                 if H_.Flags.CrosshairEnabled then
-                    -- the GUI scan is heavier, so run it a few times a second; the mouse icon is checked every frame
                     if tick() - lastScan > 0.25 then
                         lastScan = tick()
                         forceImage()
@@ -4998,20 +4965,17 @@ do
                 launched = true
                 boostFrames = 3
             end
-            -- Re-apply for a few frames in case the game overwrites the launch velocity
             if boostFrames > 0 then
                 boostFrames -= 1
                 boost()
             end
         end
         local function bindHumanoid(hum)
-            -- Re-apply the instant the game changes the values back
             for _, prop in ipairs({ "JumpPower", "JumpHeight", "UseJumpPower" }) do
                 table.insert(JumpConns, hum:GetPropertyChangedSignal(prop):Connect(function()
                     if H_.Flags.JumpPowerEnabled then applyJump() end
                 end))
             end
-            -- Force the launch velocity in case the game ignores the properties
             table.insert(JumpConns, hum.StateChanged:Connect(function(_, new)
                 if new ~= Enum.HumanoidStateType.Jumping or not H_.Flags.JumpPowerEnabled then return end
                 local root = H_.GetHRP()
@@ -5027,15 +4991,12 @@ do
             local hum = H_.GetHum()
             if hum then bindHumanoid(hum) end
         end
-        -- Permanent loops (gated by the flag) so nothing depends on connect/disconnect timing
         local function tick()
             if H_.Flags.JumpPowerEnabled then applyJump() launchCheck() end
         end
         H_.RunService.Stepped:Connect(tick)
-        -- Run after everything else in the frame so the game's resets can't win
         pcall(function() H_.RunService:UnbindFromRenderStep("JumpPowerLast") end)
         H_.RunService:BindToRenderStep("JumpPowerLast", Enum.RenderPriority.Last.Value + 1, tick)
-        -- Same timing as the slider callback: re-apply at the moment of the jump input
         H_.UserInputService.InputBegan:Connect(function(input)
             if H_.Flags.JumpPowerEnabled and input.KeyCode == Enum.KeyCode.Space then
                 applyJump()
@@ -5043,7 +5004,6 @@ do
                 if hum and hum.FloorMaterial ~= Enum.Material.Air then boostFrames = 3 end
             end
         end)
-        -- Ignore the game's own writes to the jump properties while enabled
         if hookmetamethod and newcclosure and checkcaller then
             local oldNewIndex
             oldNewIndex = hookmetamethod(game, "__newindex", newcclosure(function(self, key, value)
@@ -5052,7 +5012,6 @@ do
                     and self:IsA("Humanoid") then
                     return
                 end
-                -- no jump cooldown: refuse the game's attempts to zero the jump after repeated jumps
                 if H_.Flags.NoJumpCooldown and not checkcaller() and typeof(self) == "Instance" and self:IsA("Humanoid")
                     and (key == "JumpPower" or key == "JumpHeight") and value == 0 then
                     return
@@ -5101,7 +5060,6 @@ do
             if H_.Flags.JumpPowerEnabled then applyJump() end
         end })
 
-        -- No Jump Cooldown: keep the jump state enabled, undo cooldown zeroing, and force a jump if the game swallowed it
         H_.RunService.Heartbeat:Connect(function()
             if not H_.Flags.NoJumpCooldown then return end
             local hum = H_.GetHum()
@@ -5128,7 +5086,6 @@ do
             local hum, root = H_.GetHum(), H_.GetHRP()
             if not hum or not root or hum.Health <= 0 or hum.FloorMaterial == Enum.Material.Air then return end
             task.defer(function()
-                -- if the game blocked the jump, launch manually
                 task.wait()
                 if hum.Parent and root.Parent and hum.FloorMaterial ~= Enum.Material.Air and root.AssemblyLinearVelocity.Y < 5 then
                     local p = H_.Flags.JumpPowerEnabled and H_.Flags.JumpPowerValue or ((hum.UseJumpPower and hum.JumpPower > 0) and hum.JumpPower or 50)
@@ -5310,7 +5267,6 @@ do
             end,
         })
 
-        -- Name spoof: client-side only; rewrites your name in the leaderboard, Roblox menu/chat and game GUIs
         local NameSpoofSection = PlayersTab:Section({ Name = "Name Spoof", Side = "Right" })
         H_.Flags.NameSpoofText = H_.Flags.NameSpoofText or ""
         local touched = setmetatable({}, { __mode = "k" })
@@ -5331,7 +5287,6 @@ do
             end
             return roots
         end
-        -- labels are cached once and then checked a few per frame, so there's no full GUI scan
         local labels, inSet, rootConns, rootSet = {}, setmetatable({}, { __mode = "k" }), {}, {}
         local cursor, lastRootScan = 1, 0
         local function track(d)
@@ -5511,7 +5466,6 @@ do
                     task.wait(CFG.arriveWait)
                 end
                 local ok = pcall(fireclickdetector, t.cd)
-                -- stay at the stall until the purchase registers instead of leaving mid-buy
                 local t0 = tick()
                 while confirm and tick() - t0 < CFG.confirmTimeout do
                     task.wait(0.1)
@@ -5520,7 +5474,6 @@ do
                 if not confirm then task.wait(CFG.settle) end
                 holding = false
                 if old and g.Parent then
-                    -- carry on from where the player would be now, not where they started
                     local h = humanoid()
                     local drift = Vector3.zero
                     if h then
@@ -5546,7 +5499,6 @@ do
                 return nil
             end
 
-            -- reads the on-screen armor bar; returns fill 0..1, or nil if no bar is found
             local armorGui
             local function guiArmorFill()
                 local pg = lpl:FindFirstChildOfClass("PlayerGui")
@@ -5630,7 +5582,6 @@ do
                 return t and t.cd and t.cd.Parent and t.d <= (t.cd.MaxActivationDistance or 0)
             end
 
-            -- true when both stalls can be clicked from where we stand, no teleport needed
             function AutoBuy.bothInReach()
                 if type(fireclickdetector) ~= "function" then return false end
                 return inReach(findStall("full armor")) and inReach(findStall("stim")) and true or false
@@ -5702,7 +5653,6 @@ do
                             lastDamageAt = tick()
                             stimPending = true
                         end
-                        -- no cooldown: keep re-buying armor for as long as damage keeps coming
                         if not buying and hum.Health > 0 and tick() - lastDamageAt < 3 then
                             task.spawn(function()
                                 local h0 = humanoid()
@@ -5742,7 +5692,6 @@ do
                 if not H_.Flags.AntiAim then return H_.StopAntiAim() end
                 local hrp, hum = H_.GetHRP(), H_.GetHum()
                 if not hrp or not hum or hum.Health <= 0 then return end
-                -- other modules position the character themselves
                 if H_.RageTPQueue or H_.sentryVoided or H_.Flags.FollowEnabled or H_.Flags.AutoFight or H_.Flags.OrbitEnabled then return end
                 local mode = H_.Flags.AntiAimMode or "Spin"
                 local speed = H_.Flags.AntiAimSpeed or 20
@@ -5892,7 +5841,6 @@ do
                 task.defer(function()
                     H_.PanicAll()
                     H_.Flags.Desync = false
-                    -- [BULLET TP]
                     pcall(H_.WBSetEnabled, false)
                     H_.DestroyWhitelistGUI()
                     for _, c in ipairs(H_.Connections) do pcall(function() c:Disconnect() end) end
@@ -6059,7 +6007,6 @@ do
                         local x, y, z
                         local far = tHRP and Vector3.new(tHRP.Position.X - H.sentryCenter.X, 0, tHRP.Position.Z - H.sentryCenter.Z).Magnitude > 120
                         if far then
-                            -- shooter is out of range: orbit just above the target instead of staying at the original spot
                             x = tHRP.Position.X + math.cos(H.sentryAngle) * 12
                             z = tHRP.Position.Z + math.sin(H.sentryAngle) * 12
                             y = tHRP.Position.Y + 40 + math.sin(H.sentryAngle * 0.9) * 5
@@ -6080,7 +6027,6 @@ do
                             local tool = H.EquipNextSentryGun()
                             if tool then
                                 if H.MainRemote then
-                                    -- real shot from the game's own code; the namecall hook redirects its pellets
                                     H.sentryRedirectPart = head
                                     if tool.Parent ~= LocalPlayer.Character then
                                         local hum = H.GetHum()
