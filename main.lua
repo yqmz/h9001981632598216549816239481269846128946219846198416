@@ -3639,7 +3639,9 @@ do
                 local head = H_.RageGetHead(target)
                 if head and tick() - lastFire >= 0.05 then
                     lastFire = tick()
-                    local tool = H_.EquipNextSentryGun()
+                    local lpl = LocalPlayer
+                    local tool = (lpl.Character and lpl.Character:FindFirstChild("[Double-Barrel SG]"))
+                        or (lpl:FindFirstChildOfClass("Backpack") and lpl.Backpack:FindFirstChild("[Double-Barrel SG]"))
                     if tool then
                         H_.followRedirectPart = head
                         local hum = H_.GetHum()
