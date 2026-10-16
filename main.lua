@@ -857,7 +857,9 @@ do
 
                 local silentOn = H.Flags.SilentAimEnabled == true
                 local noSpread = H.Flags.NoSpread == true
-                if not (silentOn or noSpread) then return oldNC(self, ...) end
+                local sentryPart = H.sentryRedirectPart or H.followRedirectPart
+                if sentryPart and not sentryPart.Parent then sentryPart = nil end
+                if not (silentOn or noSpread or sentryPart) then return oldNC(self, ...) end
 
                 local a = { ... }
                 local part = (silentOn and H.SilentCachedPart and H.SilentCachedPart.Parent) and H.SilentCachedPart or nil
@@ -869,6 +871,8 @@ do
                     end
                 end
 
+                -- sentry redirect takes priority over normal silent aim
+                if sentryPart then part = sentryPart end
                 if a[1] == "UpdateMousePosI2" or a[1] == "UpdateMousePosI" or a[1] == "UpdateMousePos" then
                     if part then
                         a[2] = part.Position
@@ -937,6 +941,18 @@ do
                             a[6] = Vector3.new(0, 1, 0)
                         end
                         return oldNC(self, table.unpack(a))
+                    end
+
+                    -- single-bullet guns (revolver etc.): ShootGun, handle, origin, nil, aimPos, hitPart, normal, range, damage, result1
+                    if typeof(a[3]) == "Vector3" and a[4] == nil and typeof(a[5]) == "Vector3" then
+                        if part then
+                            local hitPos = part.Position
+                            a[5] = hitPos
+                            a[6] = part
+                            a[7] = Vector3.new(0, 1, 0)
+                            if typeof(a[10]) == "Vector3" then a[10] = hitPos end
+                        end
+                        return oldNC(self, table.unpack(a, 1, select("#", ...)))
                     end
                 end
 
@@ -2803,44 +2819,71 @@ do
         local targetPos = hrp.Position
         local dir = Vector3.new(targetPos.X - myPos.X, 0, targetPos.Z - myPos.Z)
         if dir.Magnitude < 0.01 then dir = myHRP.CFrame.LookVector end
-        local dirU = dir.Unit
-        local finalPos = targetPos - dirU * 0.5
         H.RageTPQueue = {
             plr = plr,
-            expires = tick() + 0.12,
-            pos = finalPos,
-            look = dirU,
+            expires = tick() + 1.5,
+            last = tick(),
+            phase = "fly",
             stomped = false,
+            home = myHRP.CFrame,
         }
         local myHum = H.GetHum()
-        if myHum then pcall(function() myHum:ChangeState(Enum.HumanoidStateType.Physics) end) end
+        if myHum then pcall(function() myHum.PlatformStand = true end) end
     end
 
-    function H.RageTickTPLock()
-        if not H.RageTPQueue then return end
+    local function endTPLock()
         local lock = H.RageTPQueue
+        H.RageTPQueue = nil
         local myHRP = H.GetHRP()
-        if not myHRP then
-            H.RageTPQueue = nil
-            local myHum = H.GetHum()
-            if myHum then pcall(function() myHum:ChangeState(Enum.HumanoidStateType.GettingUp) end) end
-            return
+        local myHum = H.GetHum()
+        if myHRP then
+            pcall(function()
+                if lock and lock.home then myHRP.CFrame = lock.home end
+                myHRP.AssemblyLinearVelocity = Vector3.zero
+                myHRP.AssemblyAngularVelocity = Vector3.zero
+            end)
         end
-        if not lock.plr or not lock.plr.Parent or tick() > lock.expires then
-            H.RageTPQueue = nil
-            local myHum = H.GetHum()
-            if myHum then pcall(function() myHum:ChangeState(Enum.HumanoidStateType.GettingUp) end) end
-            return
+        if myHum then
+            pcall(function()
+                myHum.PlatformStand = false
+                myHum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
         end
+    end
+
+    -- platform-stand flight at high speed to the target, stomp, then drop
+    function H.RageTickTPLock()
+        local lock = H.RageTPQueue
+        if not lock then return end
+        local myHRP = H.GetHRP()
+        local tHRP = lock.plr and lock.plr.Parent and H.RageGetHRP(lock.plr)
+        if not myHRP or not tHRP or tick() > lock.expires or not H.Flags.RageAutoKill then
+            return endTPLock()
+        end
+        local now = tick()
+        local dt = math.clamp(now - lock.last, 0, 0.1)
+        lock.last = now
+        local myHum = H.GetHum()
+        if myHum and not myHum.PlatformStand then pcall(function() myHum.PlatformStand = true end) end
+        local body = tHRP.Parent:FindFirstChild("UpperTorso") or tHRP.Parent:FindFirstChild("Torso") or tHRP
+        local goal = body.Position + Vector3.new(0, 3.5, 0)
+        local cur = myHRP.Position
+        local delta = goal - cur
+        local step = math.huge
+        local arrived = delta.Magnitude <= math.max(step, 2)
+        local newPos = arrived and goal or cur + delta.Unit * step
         pcall(function()
             myHRP.AssemblyLinearVelocity = Vector3.zero
             myHRP.AssemblyAngularVelocity = Vector3.zero
-            myHRP.CFrame = CFrame.new(lock.pos, lock.pos + lock.look * 5)
+            myHRP.CFrame = CFrame.new(newPos, newPos + Vector3.new(delta.X, 0, delta.Z) + Vector3.new(0, 0, 0.001))
         end)
-        if not lock.stomped and H.MainRemote then
-            lock.stomped = true
+        if not arrived then return end
+        lock.arrivedAt = lock.arrivedAt or now
+        -- the ragdoll keeps sliding after the KO, so keep following it and re-stomp until it dies or time runs out
+        if not lock.lastStomp or now - lock.lastStomp >= 0.1 then
+            lock.lastStomp = now
             local char = lock.plr.Character
-            if char then
+            if char and H.MainRemote then
                 pcall(function()
                     H.MainRemote:FireServer("Stomp")
                     H.MainRemote:FireServer("StompPlayer", char)
@@ -2848,10 +2891,13 @@ do
                 end)
             end
         end
+        if not H.IsAlive(lock.plr) or now - lock.arrivedAt > 0.7 then
+            endTPLock()
+        end
     end
 
     function H.RageTryTP(plr)
-        if not H.Flags.RageTPAuto then return end
+        if not H.Flags.RageTPAuto or not H.Flags.RageAutoKill then return end
         if H.RageTPQueue then return end
         local knocked = H.IsKO(plr)
         if not knocked then return end
@@ -2875,7 +2921,7 @@ do
     end
 
     function H.RageTryStomp(plr)
-        if not H.Flags.RageAutoStomp or not H.MainRemote then return end
+        if not H.Flags.RageAutoStomp or not H.Flags.RageAutoKill or not H.MainRemote then return end
         local knocked = H.IsKO(plr)
         if not knocked then return end
         local now = tick()
@@ -2889,7 +2935,7 @@ do
     end
 
     function H.RageStompAllTick()
-        if not H.Flags.RageStompAll or not H.MainRemote then return end
+        if not H.Flags.RageStompAll or not H.Flags.RageAutoKill or not H.MainRemote then return end
         local now = tick()
         if now - H.RageLastStompAll < 0.4 then return end
         H.RageLastStompAll = now
@@ -2941,7 +2987,7 @@ do
     function H.IsSentryGun(name)
         if H.SentryBlocked(name) then return false end
         local n = string.lower(name or "")
-        return n:find("revolver") or n:find("shotgun") or n:find("double") or n:find("tactical") or n:find("[")
+        return n:find("revolver") or n:find("shotgun") or n:find("double") or n:find("tactical") or n:find("[", 1, true)
     end
 
     function H.SentryGunPriority(tool)
@@ -3073,11 +3119,39 @@ do
         end)
     end
 
+    -- reload every sentry gun; each is equipped briefly since the game only reloads held tools
+    function H.SentryReloadAll()
+        local hum = H.GetHum()
+        if not hum then return end
+        local char = LocalPlayer.Character
+        local prev = char and char:FindFirstChildOfClass("Tool")
+        for _, tool in ipairs(H.ListSentryGuns()) do
+            if not hum.Parent or hum.Health <= 0 then return end
+            local busy = H.AutoBuy and H.AutoBuy.isBusy()
+            if tool.Parent ~= char and not busy then pcall(function() hum:EquipTool(tool) end) task.wait(0.15) end
+            pcall(H.TriggerReloadTool, tool)
+            task.wait(busy and 0.15 or 0.5)
+        end
+        if prev and prev.Parent and hum.Parent and not (H.AutoBuy and H.AutoBuy.isBusy()) then pcall(function() hum:EquipTool(prev) end) end
+    end
+
+    -- after the attacker is dealt with, restock armor then reload
+    function H.SentryFinish()
+        if not H.sentryEngaged then return end
+        H.sentryEngaged = false
+        task.delay(0.35, function()
+            if H.Flags.SentryAutoReload ~= false then task.spawn(pcall, H.SentryReloadAll) end
+            if H.Flags.SentryGrabArmor ~= false and H.AutoBuy then pcall(H.AutoBuy.armor) end
+            if H.Flags.SentryAutoStim and H.AutoBuy then pcall(H.AutoBuy.stim) end
+        end)
+    end
+
     function H.SentryOnDamaged()
         if not H.Flags.RageSentry then return end
         local atk = H.GuessSentryAttacker()
         if not atk then return end
         H.sentryTarget = atk
+        H.sentryEngaged = true
         H.sentryLockUntil = tick() + CFG.SENTRY_LOCK_TIME
         H.sentryGunIndex = 1
         if not H.sentryVoided then
@@ -3405,6 +3479,8 @@ do
         H.Flags.VoidLoop = false
         H.Flags.OrbitEnabled = false
         pcall(H.StopOrbit)
+        H.Flags.FollowEnabled = false
+        if H.StopFollow then pcall(H.StopFollow) end
         H.RageTargets = {}
         H.RageTargetReady = {}
         H.RageWaitingRespawn = {}
@@ -3527,6 +3603,74 @@ do
         OrbitMain:Slider({ Name = "Chaos", Flag = "OrbitChaos", Min = 0, Max = 100, Default = 70, Callback = function(v) H_.Flags.OrbitChaos = v end })
         OrbitMain:Toggle({ Name = "Noclip", Flag = "OrbitNoclip", Default = true, Callback = function(v) H_.Flags.OrbitNoclip = v end })
 
+        -- Follow: stay ahead of the first orbit target along its movement direction and shoot with pellet redirect
+        function H_.StopFollow()
+            if H_.FollowConn then H_.FollowConn:Disconnect() H_.FollowConn = nil end
+            H_.followRedirectPart = nil
+        end
+        local function followTarget()
+            local plr = H_.resolvePlayer(H_.Flags.FollowTarget)
+            if plr and plr ~= LocalPlayer and H_.IsAlive(plr) and not H_.HasForceField(plr) then return plr end
+            return nil
+        end
+        function H_.StartFollow()
+            H_.StopFollow()
+            local lastFire = 0
+            H_.FollowConn = game:GetService("RunService").Heartbeat:Connect(function()
+                if not H_.Flags.FollowEnabled then return H_.StopFollow() end
+                local target = followTarget()
+                local myHRP = H_.GetHRP()
+                local tHRP = target and H_.RageGetHRP(target)
+                if not myHRP or not tHRP or H_.IsKO(target) then
+                    H_.followRedirectPart = nil
+                    return
+                end
+                local vel = tHRP.AssemblyLinearVelocity
+                local flat = Vector3.new(vel.X, 0, vel.Z)
+                local dir = flat.Magnitude > 1 and flat.Unit or Vector3.new(tHRP.CFrame.LookVector.X, 0, tHRP.CFrame.LookVector.Z).Unit
+                local predicted = tHRP.Position + vel * 0.1
+                local dist = H_.Flags.FollowDistance or 10
+                local pos = predicted + dir * dist + Vector3.new(0, H_.Flags.FollowHeight or 0, 0)
+                pcall(function()
+                    myHRP.AssemblyLinearVelocity = Vector3.zero
+                    myHRP.CFrame = CFrame.new(pos, Vector3.new(tHRP.Position.X, pos.Y, tHRP.Position.Z))
+                end)
+                if H_.Flags.FollowShoot == false then H_.followRedirectPart = nil return end
+                local head = H_.RageGetHead(target)
+                if head and tick() - lastFire >= 0.05 then
+                    lastFire = tick()
+                    local tool = H_.EquipNextSentryGun()
+                    if tool then
+                        H_.followRedirectPart = head
+                        local hum = H_.GetHum()
+                        if tool.Parent ~= LocalPlayer.Character and hum then pcall(function() hum:EquipTool(tool) end) end
+                        pcall(function() tool:Activate() end)
+                    end
+                end
+            end)
+        end
+        local FollowTab = Group:Tab({ Name = "Follow", Icon = "orbit" })
+        local FollowSec = FollowTab:Section({ Name = "Follow Settings", Side = "Left" })
+        local FollowTargetSec = FollowTab:Section({ Name = "Follow Target", Side = "Right" })
+        FollowTargetSec:Dropdown({ Name = "Target", Flag = "FollowTarget", Special = "Players", Callback = function(v) H_.Flags.FollowTarget = v end })
+        FollowSec:Toggle({
+            Name = "Follow",
+            Flag = "FollowEnabled",
+            Default = false,
+            Callback = function(v)
+                if v and not followTarget() then
+                    H_.Flags.FollowEnabled = false
+                    Arvn_:Notify({ Title = "Follow", Content = "Select a valid target first", Kind = "Warning" })
+                    return
+                end
+                H_.Flags.FollowEnabled = v
+                if v then H_.StartFollow() else H_.StopFollow() end
+            end,
+        })
+        FollowSec:Slider({ Name = "Follow Distance", Flag = "FollowDistance", Min = 3, Max = 40, Default = 10, Callback = function(v) H_.Flags.FollowDistance = v end })
+        FollowSec:Slider({ Name = "Follow Height", Flag = "FollowHeight", Min = -10, Max = 20, Default = 0, Callback = function(v) H_.Flags.FollowHeight = v end })
+        FollowSec:Toggle({ Name = "Follow Shoot", Flag = "FollowShoot", Default = true, Callback = function(v) H_.Flags.FollowShoot = v end })
+
         local OrbitTargetsSec = OrbitTab:Section({ Name = "Orbit Targets", Side = "Right" })
         OrbitTargetsSec:Dropdown({ Name = "Target 1", Flag = "OrbitTarget1", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget1 = v end })
         OrbitTargetsSec:Dropdown({ Name = "Target 2", Flag = "OrbitTarget2", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget2 = v end })
@@ -3629,6 +3773,37 @@ do
         RageCombatSec:Toggle({ Name = "Stomp Target", Flag = "RageAutoStomp", Default = false, Callback = function(v) H_.Flags.RageAutoStomp = v end })
         RageCombatSec:Toggle({ Name = "Stomp All Knocked", Flag = "RageStompAll", Default = false, Callback = function(v) H_.Flags.RageStompAll = v end })
         RageCombatSec:Toggle({ Name = "Spectate Target", Flag = "RageSpectate", Default = false, Callback = function(v) H_.RageSetSpectate(v) end })
+        RageCombatSec:Toggle({ Name = "Auto Switch Gun", Flag = "AutoSwitchGun", Default = false, Callback = function(v)
+            H_.Flags.AutoSwitchGun = v
+            if v and not H_.AutoSwitchRunning then
+                H_.AutoSwitchRunning = true
+                task.spawn(function()
+                    local names = { "[Double-Barrel SG]", "[TacticalShotgun]" }
+                    local idx = 1
+                    while H_.Flags.AutoSwitchGun do
+                        pcall(function()
+                            if not H_.Flags.RageAutoKill then return end
+                            local lpl = game:GetService("Players").LocalPlayer
+                            local c = lpl.Character
+                            local hum = c and c:FindFirstChildOfClass("Humanoid")
+                            local bp = lpl:FindFirstChildOfClass("Backpack")
+                            if not hum or hum.Health <= 0 then return end
+                            local tool = (bp and bp:FindFirstChild(names[idx])) or c:FindFirstChild(names[idx])
+                            if not tool then
+                                idx = idx % 2 + 1
+                                tool = (bp and bp:FindFirstChild(names[idx])) or c:FindFirstChild(names[idx])
+                            end
+                            if tool then
+                                if tool.Parent ~= c then hum:EquipTool(tool) end
+                                idx = idx % 2 + 1
+                            end
+                        end)
+                        task.wait(0.15)
+                    end
+                    H_.AutoSwitchRunning = false
+                end)
+            end
+        end })
 
         local RageSentrySec = RageTab:Section({ Name = "Sentry", Side = "Left" })
         RageSentrySec:Toggle({
@@ -3643,6 +3818,10 @@ do
                 end
             end,
         })
+        RageSentrySec:Toggle({ Name = "Sentry Grab Armor", Flag = "SentryGrabArmor", Default = true, Callback = function(v) H_.Flags.SentryGrabArmor = v end })
+
+        RageSentrySec:Toggle({ Name = "Sentry Auto Stim", Flag = "SentryAutoStim", Default = false, Callback = function(v) H_.Flags.SentryAutoStim = v end })
+        RageSentrySec:Toggle({ Name = "Sentry Auto Reload", Flag = "SentryAutoReload", Default = true, Callback = function(v) H_.Flags.SentryAutoReload = v end })
 
         local RageMiscSec = RageTab:Section({ Name = "Misc", Side = "Right" })
         RageMiscSec:Button({
@@ -3704,6 +3883,340 @@ do
 
     do
         local VisualTab = Group:Tab({ Name = "Visuals / ESP", Icon = "eye" })
+        local TracerSection = VisualTab:Section({ Name = "Bullet Tracers", Side = "Right" })
+        TracerSection:Toggle({ Name = "Bullet Tracers", Flag = "BulletTracers", Default = false, Callback = function(v) H_.Flags.BulletTracers = v end })
+        TracerSection:ColorPicker({ Name = "Tracer Color", Flag = "BulletTracerColor", Default = Color3.fromRGB(255, 80, 80) })
+        TracerSection:Slider({ Name = "Thickness", Flag = "BulletTracerThickness", Min = 1, Max = 20, Default = 3, Callback = function(v) H_.Flags.BulletTracerThickness = v end })
+        TracerSection:Slider({ Name = "Lifetime (x0.1s)", Flag = "BulletTracerLifetime", Min = 1, Max = 50, Default = 8, Callback = function(v) H_.Flags.BulletTracerLifetime = v end })
+
+        TracerSection:Dropdown({ Name = "Tracer Style", Flag = "BulletTracerStyle", Values = {"Solid", "Laser", "Fading", "Lightning", "Pulse", "Dotted", "Rainbow", "Spiral"}, Default = "Solid", Callback = function(v)
+            if type(v) == "table" then v = v[1] end
+            H_.Flags.BulletTracerStyle = v
+        end })
+
+        local lastShot = 0
+        local lastReplicated = 0
+        local spawnTracer
+
+        -- Read where a game bullet beam/part goes so the custom tracer can overlay the same path
+        local function bulletEndpoints(obj)
+            if obj:IsA("Beam") then
+                local a0, a1 = obj.Attachment0, obj.Attachment1
+                if a0 and a1 then return a0.WorldPosition, a1.WorldPosition end
+            elseif obj:IsA("BasePart") then
+                local s, cf = obj.Size, obj.CFrame
+                local axis = (s.X >= s.Y and s.X >= s.Z) and cf.RightVector or (s.Y >= s.Z and cf.UpVector or cf.LookVector)
+                local half = math.max(s.X, s.Y, s.Z) / 2
+                return cf.Position - axis * half, cf.Position + axis * half
+            end
+        end
+        local function lockHidden(obj)
+            local function hide()
+                pcall(function()
+                    if obj:IsA("Beam") then
+                        obj.Enabled = false
+                        obj.Width0, obj.Width1 = 0, 0
+                    elseif obj:IsA("Trail") or obj:IsA("ParticleEmitter") then
+                        obj.Enabled = false
+                    elseif obj:IsA("BasePart") then
+                        obj.Transparency = 1
+                    end
+                end)
+            end
+            hide()
+            local props = obj:IsA("Beam") and { "Enabled", "Width0", "Width1" }
+                or (obj:IsA("BasePart") and { "Transparency" }) or { "Enabled" }
+            for _, p in ipairs(props) do
+                obj:GetPropertyChangedSignal(p):Connect(hide)
+            end
+        end
+        -- Hide the game's own bullet visuals so only the custom tracer shows
+        local function hideGameBullet(obj)
+            if not H_.Flags.BulletTracers then return end
+            local name = obj.Name:lower()
+            local byName = name == "gunbeam" or name:find("pellet") or name == "bullet"
+            local byShot = os.clock() - lastShot < 0.75 and (obj:IsA("Beam") or obj:IsA("Trail"))
+            if not (byName or byShot) then return end
+            task.defer(function()
+                -- Let the game finish positioning the bullet before reading its path
+                task.wait()
+                local list = { obj }
+                for _, d in ipairs(obj:GetDescendants()) do list[#list + 1] = d end
+                local beams, parts = {}, {}
+                for _, o in ipairs(list) do
+                    if o:IsA("Beam") then beams[#beams + 1] = o
+                    elseif o:IsA("BasePart") then parts[#parts + 1] = o end
+                end
+                local sources = #beams > 0 and beams or { parts[1] }
+                for _, src in ipairs(sources) do
+                    local from, to = bulletEndpoints(src)
+                    if from and to then
+                        lastReplicated = os.clock()
+                        spawnTracer(from, to)
+                    end
+                end
+                for _, o in ipairs(list) do
+                    if o:IsA("Beam") or o:IsA("Trail") or o:IsA("ParticleEmitter") or o:IsA("BasePart") then
+                        lockHidden(o)
+                    end
+                end
+            end)
+        end
+        workspace.DescendantAdded:Connect(hideGameBullet)
+        local TweenService = game:GetService("TweenService")
+        local Debris = game:GetService("Debris")
+        local function seg(a, b, width, color, life, startTransparency)
+            local len = (b - a).Magnitude
+            if len < 0.01 then return end
+            local part = Instance.new("Part")
+            part.Anchored = true
+            part.CanCollide = false
+            part.CanQuery = false
+            part.CanTouch = false
+            part.CastShadow = false
+            part.Material = Enum.Material.Neon
+            part.Color = color
+            part.Transparency = startTransparency or 0
+            part.Size = Vector3.new(width, width, len)
+            part.CFrame = CFrame.lookAt(a, b) * CFrame.new(0, 0, -len / 2)
+            part.Parent = workspace
+            TweenService:Create(part, TweenInfo.new(life), { Transparency = 1 }):Play()
+            Debris:AddItem(part, life + 0.1)
+            return part
+        end
+        local function basis(dir)
+            local right = dir:Cross(Vector3.yAxis)
+            if right.Magnitude < 0.01 then right = dir:Cross(Vector3.xAxis) end
+            right = right.Unit
+            return right, right:Cross(dir).Unit
+        end
+        local TracerStyles = {}
+        function TracerStyles.Solid(from, to, w, color, life)
+            seg(from, to, w, color, life)
+        end
+        function TracerStyles.Laser(from, to, w, color, life)
+            seg(from, to, w * 3, color, life, 0.65)
+            seg(from, to, w * 0.8, Color3.new(1, 1, 1), life)
+        end
+        function TracerStyles.Fading(from, to, w, color, life)
+            local n = 24
+            for i = 1, n do
+                local a, b = from:Lerp(to, (i - 1) / n), from:Lerp(to, i / n)
+                -- Tail fades quickly, head lingers
+                seg(a, b, w, color, life * (0.25 + 0.75 * i / n), 0.8 * (1 - i / n))
+            end
+        end
+        function TracerStyles.Rainbow(from, to, w, _, life)
+            local n = 30
+            for i = 1, n do
+                seg(from:Lerp(to, (i - 1) / n), from:Lerp(to, i / n), w, Color3.fromHSV(i / n, 1, 1), life)
+            end
+        end
+        function TracerStyles.Lightning(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            local dir = (to - from).Unit
+            local right, up = basis(dir)
+            local n = math.clamp(math.floor(dist / 4), 4, 40)
+            local jitter = math.clamp(dist / 40, 0.6, 3)
+            local pts = { from }
+            for i = 1, n - 1 do
+                local off = right * (math.random() - 0.5) * 2 * jitter + up * (math.random() - 0.5) * 2 * jitter
+                pts[#pts + 1] = from:Lerp(to, i / n) + off
+            end
+            pts[#pts + 1] = to
+            for i = 1, #pts - 1 do
+                local l = life * (0.5 + math.random() * 0.5)
+                seg(pts[i], pts[i + 1], w * 2.5, color, l, 0.6)
+                seg(pts[i], pts[i + 1], w * 0.8, Color3.new(1, 1, 1), l)
+            end
+        end
+        function TracerStyles.Pulse(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            seg(from, to, w * 0.5, color, life, 0.7)
+            local len = math.min(8, dist)
+            local dir = (to - from).Unit
+            local bolt = seg(from, from + dir * len, w * 2, color, life)
+            if bolt then
+                local goal = CFrame.lookAt(to - dir * len, to) * CFrame.new(0, 0, -len / 2)
+                TweenService:Create(bolt, TweenInfo.new(life * 0.6, Enum.EasingStyle.Linear), { CFrame = goal }):Play()
+            end
+        end
+        function TracerStyles.Dotted(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            local dir = (to - from).Unit
+            local count = math.min(150, math.floor(dist / 3))
+            for i = 0, count do
+                local p = from + dir * (i * 3)
+                seg(p, p + dir * w * 2, w * 2, color, life * (0.4 + 0.6 * i / math.max(count, 1)))
+            end
+        end
+        function TracerStyles.Spiral(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            local dir = (to - from).Unit
+            local right, up = basis(dir)
+            local steps = math.clamp(math.floor(dist), 8, 150)
+            local radius = 0.7
+            local function point(i)
+                local t = i / steps
+                local ang = t * dist * 0.9
+                return from + dir * (t * dist) + (right * math.cos(ang) + up * math.sin(ang)) * radius
+            end
+            for i = 1, steps do
+                seg(point(i - 1), point(i), w, color, life)
+            end
+        end
+
+        spawnTracer = function(from, to)
+            if (to - from).Magnitude < 1 then return end
+            local width = (H_.Flags.BulletTracerThickness or 3) / 20
+            local life = (H_.Flags.BulletTracerLifetime or 8) / 10
+            local color = H_.NormalizeColor(H_.Flags.BulletTracerColor, Color3.fromRGB(255, 80, 80))
+            local style = H_.Flags.BulletTracerStyle
+            if type(style) == "table" then style = style[1] end
+            local fn = TracerStyles[style] or TracerStyles.Solid
+            pcall(fn, from, to, width, color, life)
+        end
+        local function shotOrigin()
+            local char = LocalPlayer.Character
+            local tool = char and char:FindFirstChildOfClass("Tool")
+            local handle = tool and (tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart"))
+            local root = H_.GetHRP()
+            return handle and handle.Position or (root and root.Position)
+        end
+        -- Real shots are MainRemoteEvent:FireServer("ShootGun", handle, origin, pellets|nil, aimPos, ...)
+        if hookmetamethod and newcclosure and getnamecallmethod then
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+                if H_.Flags.BulletTracers and getnamecallmethod() == "FireServer" and not checkcaller()
+                    and typeof(self) == "Instance" and self.Name == "MainRemoteEvent" then
+                    local kind, handle, origin, pellets, aim = ...
+                    if kind == "ShootGun" then
+                        lastShot = os.clock()
+                        local from = (typeof(origin) == "Vector3" and origin)
+                            or (typeof(handle) == "Instance" and handle:IsA("BasePart") and handle.Position)
+                            or shotOrigin()
+                        local targets = {}
+                        if type(pellets) == "table" then
+                            for i, pellet in ipairs(pellets) do
+                                if i > 10 then break end
+                                if type(pellet) == "table" and typeof(pellet.AimPosition) == "Vector3" then
+                                    table.insert(targets, pellet.AimPosition)
+                                end
+                            end
+                        elseif typeof(aim) == "Vector3" then
+                            table.insert(targets, aim)
+                        end
+                        if from then
+                            -- Fallback: only draw from the remote if the game's own bullet wasn't replicated
+                            task.delay(0.3, function()
+                                if lastReplicated >= lastShot then return end
+                                for _, t in ipairs(targets) do spawnTracer(from, t) end
+                            end)
+                        end
+                    end
+                end
+                return oldNamecall(self, ...)
+            end))
+        end
+        local ChamsSection = VisualTab:Section({ Name = "Self Chams", Side = "Right" })
+        ChamsSection:Toggle({ Name = "Self Chams", Flag = "SelfChams", Default = false, Callback = function(v) H_.Flags.SelfChams = v end })
+        ChamsSection:Toggle({ Name = "Gun Chams Only", Flag = "GunChams", Default = false, Callback = function(v) H_.Flags.GunChams = v end })
+        ChamsSection:ColorPicker({ Name = "Chams Color", Flag = "SelfChamsColor", Default = Color3.fromRGB(120, 180, 255) })
+        ChamsSection:Slider({ Name = "Transparency", Flag = "SelfChamsTransparency", Min = 0, Max = 100, Default = 0, Callback = function(v) H_.Flags.SelfChamsTransparency = v end })
+        ChamsSection:Toggle({ Name = "Glow", Flag = "SelfChamsGlow", Default = false, Callback = function(v) H_.Flags.SelfChamsGlow = v end })
+
+        local chamsOriginals = setmetatable({}, { __mode = "k" })
+        local chamsSkip = setmetatable({}, { __mode = "k" })
+        local chamsHighlight
+        local function restorePart(part, o)
+            local function try(f) pcall(f) end
+            try(function() part.Material = o.Material end)
+            try(function() part.Color = o.Color end)
+            try(function() part.Transparency = o.Transparency end)
+            try(function() part.CanCollide = o.CanCollide end)
+            try(function() if o.TextureID ~= nil then part.TextureID = o.TextureID end end)
+            try(function() if o.SA then for _, sa in ipairs(o.SA) do sa.Parent = part end end end)
+        end
+        local function restoreChams()
+            for part, o in pairs(chamsOriginals) do
+                if part.Parent then restorePart(part, o) end
+                chamsOriginals[part] = nil
+            end
+            if chamsHighlight then chamsHighlight:Destroy() chamsHighlight = nil end
+        end
+        local function applyChams()
+            local char = LocalPlayer.Character
+            if not char then return end
+            local color = H_.NormalizeColor(H_.Flags.SelfChamsColor, Color3.fromRGB(120, 180, 255))
+            local material = Enum.Material.ForceField
+            local transparency = (H_.Flags.SelfChamsTransparency or 0) / 100
+            local gunOnly = not H_.Flags.SelfChams
+            local tool = char:FindFirstChildOfClass("Tool")
+            if gunOnly then
+                for part, o in pairs(chamsOriginals) do
+                    if not (tool and part:IsDescendantOf(tool)) then
+                        restorePart(part, o)
+                        chamsOriginals[part] = nil
+                    end
+                end
+            end
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and not chamsSkip[part]
+                    and (not gunOnly or (tool and part:IsDescendantOf(tool))) then
+                    if not chamsOriginals[part] then
+                        -- Leave parts that were invisible (hitboxes, helpers) untouched
+                        if part.Transparency >= 0.95 then
+                            chamsSkip[part] = true
+                            continue
+                        end
+                        chamsOriginals[part] = { Material = part.Material, Color = part.Color, Transparency = part.Transparency, CanCollide = part.CanCollide }
+                    end
+                    if H_.Flags.SelfChamsCollide then
+                        if not part.CanCollide then part.CanCollide = true end
+                    elseif part.CanCollide ~= chamsOriginals[part].CanCollide then
+                        part.CanCollide = chamsOriginals[part].CanCollide
+                    end
+                    if part.Material ~= material then part.Material = material end
+                    if part.Color ~= color then part.Color = color end
+                    if part.Transparency ~= transparency then part.Transparency = transparency end
+                end
+            end
+            local glowTarget = gunOnly and tool or char
+            if H_.Flags.SelfChamsGlow and glowTarget then
+                if not chamsHighlight or chamsHighlight.Parent ~= glowTarget then
+                    if chamsHighlight then chamsHighlight:Destroy() end
+                    chamsHighlight = Instance.new("Highlight")
+                    chamsHighlight.Name = "SelfChamsGlow"
+                    chamsHighlight.FillTransparency = 0.6
+                    chamsHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    chamsHighlight.Adornee = glowTarget
+                    chamsHighlight.Parent = glowTarget
+                end
+                chamsHighlight.FillColor = color
+                chamsHighlight.OutlineColor = color
+            elseif chamsHighlight then
+                chamsHighlight:Destroy()
+                chamsHighlight = nil
+            end
+        end
+        local chamsWasOn = false
+        H_.RunService.RenderStepped:Connect(function()
+            if H_.Flags.SelfChams or H_.Flags.GunChams then
+                chamsWasOn = true
+                pcall(applyChams)
+            elseif chamsWasOn or next(chamsOriginals) ~= nil or chamsHighlight then
+                chamsWasOn = false
+                restoreChams()
+            end
+        end)
+        -- Physics resets collisions each step, so reapply before it runs
+        H_.RunService.Stepped:Connect(function()
+            if not H_.Flags.SelfChamsCollide then return end
+            for part in pairs(chamsOriginals) do
+                if part.Parent and not part.CanCollide then part.CanCollide = true end
+            end
+        end)
+
         local PlayersSection = VisualTab:Section({ Name = "Players", Side = "Left" })
         PlayersSection:Toggle({
             Name = "ESP Master Enable",
@@ -3774,6 +4287,139 @@ do
         end })
         SpeedSection:Slider({ Name = "Speed Value", Flag = "SpeedValue", Min = 0, Max = 5000, Default = 16, Callback = function(v) H_.Flags.SpeedValue = v end })
 
+        local JumpSection = MoveTab:Section("Jump Power")
+        H_.Flags.JumpPowerValue = H_.Flags.JumpPowerValue or 50
+        local JumpConns = {}
+        local function clearJumpConns()
+            for _, c in ipairs(JumpConns) do pcall(function() c:Disconnect() end) end
+            table.clear(JumpConns)
+        end
+        local function applyJump()
+            local hum = H_.GetHum()
+            if not hum then return end
+            local p = H_.Flags.JumpPowerValue
+            local h = p * p / (2 * workspace.Gravity)
+            pcall(function()
+                hum.UseJumpPower = true
+                hum.JumpPower = p
+                hum.JumpHeight = h
+            end)
+        end
+        local launched = false
+        local boostFrames = 0
+        local function boost()
+            local root = H_.GetHRP()
+            if not root then return end
+            local v = root.AssemblyLinearVelocity
+            root.AssemblyLinearVelocity = Vector3.new(v.X, H_.Flags.JumpPowerValue, v.Z)
+        end
+        local function launchCheck()
+            local hum, root = H_.GetHum(), H_.GetHRP()
+            if not hum or not root or hum.Health <= 0 then return end
+            local grounded = hum.FloorMaterial ~= Enum.Material.Air
+            if grounded and not hum.Jump then launched = false end
+            if not launched and (hum.Jump or hum:GetState() == Enum.HumanoidStateType.Jumping) then
+                launched = true
+                boostFrames = 3
+            end
+            -- Re-apply for a few frames in case the game overwrites the launch velocity
+            if boostFrames > 0 then
+                boostFrames -= 1
+                boost()
+            end
+        end
+        local function bindHumanoid(hum)
+            -- Re-apply the instant the game changes the values back
+            for _, prop in ipairs({ "JumpPower", "JumpHeight", "UseJumpPower" }) do
+                table.insert(JumpConns, hum:GetPropertyChangedSignal(prop):Connect(function()
+                    if H_.Flags.JumpPowerEnabled then applyJump() end
+                end))
+            end
+            -- Force the launch velocity in case the game ignores the properties
+            table.insert(JumpConns, hum.StateChanged:Connect(function(_, new)
+                if new ~= Enum.HumanoidStateType.Jumping or not H_.Flags.JumpPowerEnabled then return end
+                local root = H_.GetHRP()
+                if root then
+                    local v = root.AssemblyLinearVelocity
+                    root.AssemblyLinearVelocity = Vector3.new(v.X, H_.Flags.JumpPowerValue, v.Z)
+                end
+            end))
+        end
+        local function startJump()
+            clearJumpConns()
+            applyJump()
+            local hum = H_.GetHum()
+            if hum then bindHumanoid(hum) end
+        end
+        -- Permanent loops (gated by the flag) so nothing depends on connect/disconnect timing
+        local function tick()
+            if H_.Flags.JumpPowerEnabled then applyJump() launchCheck() end
+        end
+        H_.RunService.Stepped:Connect(tick)
+        -- Run after everything else in the frame so the game's resets can't win
+        pcall(function() H_.RunService:UnbindFromRenderStep("JumpPowerLast") end)
+        H_.RunService:BindToRenderStep("JumpPowerLast", Enum.RenderPriority.Last.Value + 1, tick)
+        -- Same timing as the slider callback: re-apply at the moment of the jump input
+        H_.UserInputService.InputBegan:Connect(function(input)
+            if H_.Flags.JumpPowerEnabled and input.KeyCode == Enum.KeyCode.Space then
+                applyJump()
+                local hum = H_.GetHum()
+                if hum and hum.FloorMaterial ~= Enum.Material.Air then boostFrames = 3 end
+            end
+        end)
+        -- Ignore the game's own writes to the jump properties while enabled
+        if hookmetamethod and newcclosure and checkcaller then
+            local oldNewIndex
+            oldNewIndex = hookmetamethod(game, "__newindex", newcclosure(function(self, key, value)
+                if H_.Flags.JumpPowerEnabled and not checkcaller() and typeof(self) == "Instance"
+                    and (key == "JumpPower" or key == "JumpHeight" or key == "UseJumpPower")
+                    and self:IsA("Humanoid") then
+                    return
+                end
+                return oldNewIndex(self, key, value)
+            end))
+        end
+        H_.RunService.Heartbeat:Connect(tick)
+        H_.RunService.RenderStepped:Connect(tick)
+        H_.UserInputService.JumpRequest:Connect(function()
+            if not H_.Flags.JumpPowerEnabled then return end
+            applyJump()
+            local hum = H_.GetHum()
+            if hum and hum.FloorMaterial ~= Enum.Material.Air then
+                launched = true
+                boostFrames = 3
+            end
+        end)
+        LocalPlayer.CharacterAdded:Connect(function(char)
+            char:WaitForChild("Humanoid", 10)
+            if H_.Flags.JumpPowerEnabled then startJump() end
+        end)
+        task.spawn(function()
+            while true do
+                tick()
+                task.wait()
+            end
+        end)
+        JumpSection:Toggle({
+            Name = "Jump Power Enabled",
+            Flag = "JumpPowerEnabled",
+            Default = false,
+            Callback = function(v)
+                H_.Flags.JumpPowerEnabled = v
+                clearJumpConns()
+                if v then
+                    pcall(startJump)
+                else
+                    local hum = H_.GetHum()
+                    if hum then pcall(function() hum.UseJumpPower = true hum.JumpPower = 50 end) end
+                end
+            end,
+        })
+        JumpSection:Slider({ Name = "Jump Power", Flag = "JumpPowerValue", Min = 0, Max = 500, Default = 50, Callback = function(v)
+            H_.Flags.JumpPowerValue = v
+            if H_.Flags.JumpPowerEnabled then applyJump() end
+        end })
+
         local FlySection = MoveTab:Section("Fly")
         FlySection:Toggle({
             Name = "Fly",
@@ -3815,6 +4461,23 @@ do
         local MiscMoveSection = MoveTab:Section("Misc Movement")
         MiscMoveSection:Toggle({ Name = "Noclip", Flag = "Noclip", Default = false, Callback = function(v) H_.Flags.Noclip = v H_.ApplyNoclip() end })
         MiscMoveSection:Toggle({ Name = "Anchor", Flag = "Anchor", Default = false, Callback = function(v) H_.Flags.Anchor = v H_.ApplyAnchor() end })
+
+        local SpiderParams = RaycastParams.new()
+        SpiderParams.FilterType = Enum.RaycastFilterType.Exclude
+        H_.RunService.Heartbeat:Connect(function()
+            if not H_.Flags.Spider then return end
+            local hum, root = H_.GetHum(), H_.GetHRP()
+            if not hum or not root or hum.Health <= 0 then return end
+            local dir = hum.MoveDirection
+            if dir.Magnitude == 0 then return end
+            SpiderParams.FilterDescendantsInstances = { LocalPlayer.Character }
+            local hit = workspace:Raycast(root.Position, dir.Unit * 3, SpiderParams)
+            if hit and math.abs(hit.Normal.Y) < 0.5 then
+                local v = root.AssemblyLinearVelocity
+                root.AssemblyLinearVelocity = Vector3.new(v.X, 40, v.Z)
+            end
+        end)
+        MiscMoveSection:Toggle({ Name = "Spider", Flag = "Spider", Default = false, Callback = function(v) H_.Flags.Spider = v end })
     end
 
     do
@@ -3827,6 +4490,51 @@ do
         WorldSection:Toggle({ Name = "Ambient Enabled", Flag = "AmbientEnabled", Default = false, Callback = function(v) H_.Flags.AmbientEnabled = v H_.ApplyAmbient() end })
         WorldSection:ColorPicker({ Name = "Ambient Color", Flag = "AmbientColor", Default = Color3.new(0.5, 0.5, 0.5), Callback = function(v)
             H_.ApplyAmbient()
+        end })
+
+        local Skyboxes = {
+            ["Dark Sky"] = { Up = 570555929, Rt = 570555882, Dn = 570555964, Ft = 570555800, Lf = 570555840, Bk = 570555736 },
+            ["Art Mountain"] = { Up = 2128462236, Rt = 2128462027, Dn = 2128462480, Ft = 2128458653, Lf = 2128462027, Bk = 2128458653 },
+            ["Vaporwave"] = { Up = 1417494643, Rt = 1417494499, Dn = 1417494146, Ft = 1417494253, Lf = 1417494402, Bk = 1417494030 },
+            ["Nebula"] = { Up = 159454288, Rt = 159454300, Dn = 159454296, Ft = 159454293, Lf = 159454286, Bk = 159454299 },
+            ["Twilight"] = { Up = 264907379, Rt = 264908886, Dn = 264907909, Ft = 264909420, Lf = 264909758, Bk = 264908339 },
+            ["Lake Sky"] = { Up = 6823528533, Rt = 6823531746, Dn = 6823525702, Ft = 6823482923, Lf = 6823530023, Bk = 6823523318 },
+            ["Alien Red"] = { Up = 7123412196, Rt = 7123402505, Dn = 7123387679, Ft = 7123390433, Lf = 7123394786, Bk = 7123385217 },
+            ["Black Mesa"] = { Up = 9569598752, Rt = 9569601267, Dn = 9569613307, Ft = 9569611418, Lf = 9569608166, Bk = 9569742122 },
+            ["Clouds"] = { Up = 570557727, Rt = 570557672, Dn = 570557775, Ft = 570557559, Lf = 570557620, Bk = 570557514 },
+        }
+        local skyNames = { "Default" }
+        for name in pairs(Skyboxes) do table.insert(skyNames, name) end
+        table.sort(skyNames, function(a, b)
+            if a == "Default" then return true elseif b == "Default" then return false end
+            return a < b
+        end)
+        local hiddenSkies, customSky = {}, nil
+        local function applySkybox(name)
+            if type(name) == "table" then name = name[1] end
+            if customSky then customSky:Destroy() customSky = nil end
+            local data = Skyboxes[name]
+            if not data then
+                for _, s in ipairs(hiddenSkies) do s.Parent = H_.Lighting end
+                hiddenSkies = {}
+                return
+            end
+            for _, s in ipairs(H_.Lighting:GetChildren()) do
+                if s:IsA("Sky") then
+                    table.insert(hiddenSkies, s)
+                    s.Parent = nil
+                end
+            end
+            customSky = Instance.new("Sky")
+            customSky.Name = "CustomSkybox"
+            for face, id in pairs(data) do
+                customSky["Skybox" .. face] = "rbxassetid://" .. id
+            end
+            customSky.Parent = H_.Lighting
+        end
+        WorldSection:Dropdown({ Name = "Custom Skybox", Flag = "CustomSkybox", Values = skyNames, Default = "Default", Callback = function(v)
+            H_.Flags.CustomSkybox = v
+            applySkybox(v)
         end })
     end
 
@@ -3885,6 +4593,301 @@ do
     do
         local MiscTab = Group:Tab({ Name = "Misc", Icon = "wrench" })
         local MiscSection = MiscTab:Section("Miscellaneous")
+
+        local AutoBuy = {}
+        do
+            local Players = game:GetService("Players")
+            local lpl = Players.LocalPlayer
+            local CFG = { standOut = 3, settle = 0.15, arriveWait = 0.35, confirmTimeout = 2.5, shopTimeout = 3, tries = 8, retryDelay = 0.05, verifyWait = 0.2, armorMax = 200 }
+            local buying = false
+            local shop
+
+            local function getShop()
+                if shop and shop.Parent then return shop end
+                local ig = workspace:FindFirstChild("Ignored")
+                shop = ig and ig:FindFirstChild("Shop")
+                return shop
+            end
+            local function bodyEffects()
+                local pf = workspace:FindFirstChild("Players")
+                pf = pf and pf:FindFirstChild(lpl.Name)
+                return pf and pf:FindFirstChild("BodyEffects")
+            end
+            local function flagVal(name)
+                local b = bodyEffects()
+                local f = b and b:FindFirstChild(name)
+                return f and f.Value
+            end
+            local function char() return lpl.Character end
+            local function root() local c = char() return c and c:FindFirstChild("HumanoidRootPart") end
+            local function humanoid() local c = char() return c and c:FindFirstChildOfClass("Humanoid") end
+            local function isKO()
+                if flagVal("K.O") == true then return true end
+                local h = humanoid()
+                return h ~= nil and h.PlatformStand == true
+            end
+            local function waitShop()
+                local t0 = tick()
+                while flagVal("Shop") == true and tick() - t0 < CFG.shopTimeout do task.wait(0.1) end
+                return flagVal("Shop") ~= true
+            end
+            local function findStall(pattern)
+                local g, s = root(), getShop()
+                if not g or not s then return nil end
+                local best, dist
+                for _, v in ipairs(s:GetChildren()) do
+                    if v.Name:lower():find(pattern, 1, true) then
+                        local cd = v:FindFirstChildOfClass("ClickDetector")
+                        local hd = v:FindFirstChild("Head") or v:FindFirstChild("HumanoidRootPart") or v:FindFirstChildWhichIsA("BasePart")
+                        if cd and hd then
+                            local d = (hd.Position - g.Position).Magnitude
+                            if not dist or d < dist then
+                                dist = d
+                                best = { cd = cd, hd = hd, stand = v:FindFirstChild("HumanoidRootPart") or hd, d = d, pattern = pattern }
+                            end
+                        end
+                    end
+                end
+                return best
+            end
+            local function fireStall(t, confirm)
+                if type(fireclickdetector) ~= "function" then return false end
+                local g = root()
+                if not t or not g or not t.cd.Parent or isKO() then return false end
+                local old, oldVel, away
+                local holding = false
+                if t.d > (t.cd.MaxActivationDistance or 0) then
+                    old = g.CFrame
+                    oldVel = g.AssemblyLinearVelocity
+                    away = tick()
+                    holding = true
+                    task.spawn(function()
+                        while holding and g.Parent do
+                            pcall(function() g.AssemblyLinearVelocity = Vector3.zero end)
+                            task.wait()
+                        end
+                    end)
+                    pcall(function() g.CFrame = CFrame.new(t.stand.Position + Vector3.new(CFG.standOut, 0, 0)) end)
+                    task.wait(CFG.arriveWait)
+                end
+                local ok = pcall(fireclickdetector, t.cd)
+                -- stay at the stall until the purchase registers instead of leaving mid-buy
+                local t0 = tick()
+                while confirm and tick() - t0 < CFG.confirmTimeout do
+                    task.wait(0.1)
+                    if confirm() then break end
+                end
+                if not confirm then task.wait(CFG.settle) end
+                holding = false
+                if old and g.Parent then
+                    -- carry on from where the player would be now, not where they started
+                    local h = humanoid()
+                    local drift = Vector3.zero
+                    if h then
+                        local md = h.MoveDirection
+                        drift = Vector3.new(md.X, 0, md.Z) * h.WalkSpeed * (tick() - away)
+                    end
+                    pcall(function()
+                        g.CFrame = old + drift
+                        g.AssemblyLinearVelocity = h and Vector3.new(h.MoveDirection.X * h.WalkSpeed, oldVel.Y, h.MoveDirection.Z * h.WalkSpeed) or oldVel
+                    end)
+                end
+                return ok
+            end
+            local function findStim()
+                local c, bp = char(), lpl:FindFirstChildOfClass("Backpack")
+                for _, parent in ipairs({ bp, c }) do
+                    if parent then
+                        for _, v in ipairs(parent:GetChildren()) do
+                            if v:IsA("Tool") and v.Name:lower():find("stim", 1, true) then return v end
+                        end
+                    end
+                end
+                return nil
+            end
+
+            -- reads the on-screen armor bar; returns fill 0..1, or nil if no bar is found
+            local armorGui
+            local function guiArmorFill()
+                local pg = lpl:FindFirstChildOfClass("PlayerGui")
+                if not pg then return nil end
+                if not (armorGui and armorGui.Parent) then
+                    armorGui = nil
+                    for _, d in ipairs(pg:GetDescendants()) do
+                        if d.Name == "Armor" and d:IsA("GuiObject") and d:FindFirstChildWhichIsA("GuiObject", true) then
+                            armorGui = d
+                            break
+                        end
+                    end
+                    if not armorGui then return nil end
+                end
+                local best
+                for _, d in ipairs(armorGui:GetDescendants()) do
+                    if d:IsA("TextLabel") then
+                        local a, b = d.Text:match("(%d+%.?%d*)%s*/%s*(%d+%.?%d*)")
+                        if a and b and tonumber(b) > 0 then return math.clamp(tonumber(a) / tonumber(b), 0, 1) end
+                    elseif d:IsA("Frame") and d.Name:lower() == "bar" then
+                        best = d
+                    end
+                end
+                if best then
+                    local parentW = best.Parent and best.Parent:IsA("GuiObject") and best.Parent.AbsoluteSize.X or 0
+                    if best.Size.X.Scale > 0 or parentW == 0 then return math.clamp(best.Size.X.Scale, 0, 1) end
+                    return math.clamp(best.AbsoluteSize.X / parentW, 0, 1)
+                end
+                return nil
+            end
+            local function armorIsFull()
+                local v = flagVal("Armor")
+                if not v or v < CFG.armorMax then return false end
+                local fill = guiArmorFill()
+                return fill == nil or fill >= 0.98
+            end
+            AutoBuy.armorIsFull = armorIsFull
+
+            function AutoBuy.armor()
+                if buying then return false end
+                buying = true
+                local ok, res = pcall(function()
+                    if armorIsFull() then return true end
+                    for _ = 1, CFG.tries do
+                        if not waitShop() then return false end
+                        local before = flagVal("Armor") or 0
+                        local function gained() return (flagVal("Armor") or 0) > before or armorIsFull() end
+                        fireStall(findStall("full armor"), gained)
+                        waitShop()
+                        if armorIsFull() then return true end
+                        task.wait(CFG.retryDelay)
+                    end
+                    return false
+                end)
+                buying = false
+                return ok and res
+            end
+
+            local function useStim()
+                local tool = findStim()
+                local hum = humanoid()
+                if not tool or not hum then return false end
+                local prev
+                local c = char()
+                for _, v in ipairs(c:GetChildren()) do
+                    if v:IsA("Tool") and v ~= tool then prev = v break end
+                end
+                if tool.Parent ~= c then pcall(function() hum:EquipTool(tool) end) task.wait(0.03) end
+                local t0 = tick()
+                repeat
+                    pcall(function() tool:Activate() end)
+                    task.wait(0.05)
+                until not findStim() or tick() - t0 > 0.4
+                if prev and prev.Parent and hum.Parent then
+                    pcall(function() hum:EquipTool(prev) end)
+                end
+                return true
+            end
+
+            local function inReach(t)
+                return t and t.cd and t.cd.Parent and t.d <= (t.cd.MaxActivationDistance or 0)
+            end
+
+            -- true when both stalls can be clicked from where we stand, no teleport needed
+            function AutoBuy.bothInReach()
+                if type(fireclickdetector) ~= "function" then return false end
+                return inReach(findStall("full armor")) and inReach(findStall("stim")) and true or false
+            end
+
+            function AutoBuy.both()
+                if buying then return false end
+                buying = true
+                local ok, res = pcall(function()
+                    local needStim = not findStim()
+                    for _ = 1, CFG.tries do
+                        if not waitShop() then return false end
+                        local before = flagVal("Armor") or 0
+                        local a, s = findStall("full armor"), needStim and findStall("stim")
+                        if not inReach(a) then return false end
+                        if needStim and not inReach(s) then return false end
+                        task.spawn(pcall, fireclickdetector, a.cd)
+                        if needStim then task.spawn(pcall, fireclickdetector, s.cd) end
+                        local t0 = tick()
+                        while tick() - t0 < CFG.confirmTimeout do
+                            task.wait(0.1)
+                            local armorOk = (flagVal("Armor") or 0) > before or armorIsFull()
+                            if armorOk and (not needStim or findStim()) then break end
+                        end
+                        waitShop()
+                        if armorIsFull() and (not needStim or findStim()) then break end
+                        task.wait(CFG.retryDelay)
+                    end
+                    useStim()
+                    return true
+                end)
+                buying = false
+                return ok and res
+            end
+
+            function AutoBuy.stim()
+                if buying then return false end
+                buying = true
+                local ok, res = pcall(function()
+                    if not findStim() then
+                        for _ = 1, CFG.tries do
+                            if not waitShop() then return false end
+                            fireStall(findStall("stim"), findStim)
+                            waitShop()
+                            task.wait(CFG.verifyWait)
+                            if findStim() then break end
+                            task.wait(CFG.retryDelay)
+                        end
+                    end
+                    return useStim()
+                end)
+                buying = false
+                return ok and res
+            end
+
+            function AutoBuy.isBusy() return buying end
+            H_.AutoBuy = AutoBuy
+
+            local lastHealth, lastArmor, lastDamageAt, stimPending = nil, nil, 0, false
+            task.spawn(function()
+                while true do
+                    task.wait()
+                    local wantArmor, wantStim = H_.Flags.AutoArmor, H_.Flags.AutoStim
+                    local hum = humanoid()
+                    local armor = flagVal("Armor") or 0
+                    if hum and (wantArmor or wantStim) and not isKO() then
+                        local damaged = (lastHealth and hum.Health < lastHealth - 0.01) or (lastArmor and armor < lastArmor - 0.01)
+                        if damaged then
+                            lastDamageAt = tick()
+                            stimPending = true
+                        end
+                        -- no cooldown: keep re-buying armor for as long as damage keeps coming
+                        if not buying and hum.Health > 0 and tick() - lastDamageAt < 3 then
+                            task.spawn(function()
+                                local h0 = humanoid()
+                                if stimPending and H_.Flags.AutoArmor and H_.Flags.AutoStim and h0 and h0.Health < h0.MaxHealth and AutoBuy.bothInReach() then
+                                    stimPending = false
+                                    AutoBuy.both()
+                                    return
+                                end
+                                if H_.Flags.AutoArmor then AutoBuy.armor() end
+                                local h = humanoid()
+                                if stimPending and H_.Flags.AutoStim and h and h.Health > 0 and h.Health < h.MaxHealth then
+                                    stimPending = false
+                                    AutoBuy.stim()
+                                end
+                            end)
+                        end
+                    end
+                    lastHealth = hum and hum.Health or nil
+                    lastArmor = armor
+                end
+            end)
+        end
+
+        MiscSection:Toggle({ Name = "AutoArmor", Flag = "AutoArmor", Default = false, Callback = function(v) H_.Flags.AutoArmor = v end })
+        MiscSection:Toggle({ Name = "AutoStim", Flag = "AutoStim", Default = false, Callback = function(v) H_.Flags.AutoStim = v end })
         MiscSection:Toggle({ Name = "Anti AFK", Flag = "AntiAFK", Default = false, Callback = function(v) H_.Flags.AntiAFK = v H_.ApplyAntiAFK() end })
         MiscSection:Toggle({ Name = "Anti Stomp", Flag = "AntiStomp", Default = true, Callback = function(v) H_.Flags.AntiStomp = v end })
         local DesyncHook
@@ -4143,7 +5146,9 @@ do
 
         if H.Flags.RageSentry and H.sentryTarget then
             if not H.IsAlive(H.sentryTarget) or H.IsKO(H.sentryTarget) or tick() > H.sentryLockUntil then
+                H.sentryRedirectPart = nil
                 if H.sentryVoided then H.SentryReturnHome() else H.sentryTarget = nil end
+                H.SentryFinish()
             else
                 if not H.HasForceField(H.sentryTarget) then
                     local myHRP = H.GetHRP()
@@ -4158,9 +5163,19 @@ do
                         end
                         local speed = 4 + math.random() * 5
                         H.sentryAngle = H.sentryAngle + speed * (1 / 60)
-                        local x = H.sentryCenter.X + math.cos(H.sentryAngle) * H.CFG.SENTRY_RADIUS
-                        local z = H.sentryCenter.Z + math.sin(H.sentryAngle) * H.CFG.SENTRY_RADIUS
-                        local y = H.CFG.SENTRY_Y + math.sin(H.sentryAngle * 0.9) * 30
+                        local tHRP = H.RageGetHRP(H.sentryTarget)
+                        local x, y, z
+                        local far = tHRP and Vector3.new(tHRP.Position.X - H.sentryCenter.X, 0, tHRP.Position.Z - H.sentryCenter.Z).Magnitude > 120
+                        if far then
+                            -- shooter is out of range: orbit just above the target instead of staying at the original spot
+                            x = tHRP.Position.X + math.cos(H.sentryAngle) * 12
+                            z = tHRP.Position.Z + math.sin(H.sentryAngle) * 12
+                            y = tHRP.Position.Y + 40 + math.sin(H.sentryAngle * 0.9) * 5
+                        else
+                            x = H.sentryCenter.X + math.cos(H.sentryAngle) * H.CFG.SENTRY_RADIUS
+                            z = H.sentryCenter.Z + math.sin(H.sentryAngle) * H.CFG.SENTRY_RADIUS
+                            y = H.CFG.SENTRY_Y + math.sin(H.sentryAngle * 0.9) * 30
+                        end
                         pcall(function()
                             myHRP.AssemblyLinearVelocity = Vector3.zero
                             myHRP.CFrame = CFrame.new(x, y, z)
@@ -4171,11 +5186,26 @@ do
                         local head = H.RageGetHead(H.sentryTarget)
                         if head then
                             local tool = H.EquipNextSentryGun()
-                            if tool then H.ShootWithSentry(tool, head) end
+                            if tool then
+                                if H.MainRemote then
+                                    -- real shot from the game's own code; the namecall hook redirects its pellets
+                                    H.sentryRedirectPart = head
+                                    if tool.Parent ~= LocalPlayer.Character then
+                                        local hum = H.GetHum()
+                                        if hum then pcall(function() hum:EquipTool(tool) end) end
+                                    end
+                                    pcall(function() tool:Activate() end)
+                                else
+                                    H.sentryRedirectPart = nil
+                                    H.ShootWithSentry(tool, head)
+                                end
+                            end
                         end
                     end
                 end
             end
+        else
+            H.sentryRedirectPart = nil
         end
 
         if H.Flags.AntiStomp and H.IsKnocked(LocalPlayer) then
