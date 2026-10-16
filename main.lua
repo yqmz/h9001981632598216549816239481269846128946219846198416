@@ -55,7 +55,6 @@ do
     H.Flags.NoSpread           = H.Flags.NoSpread or false
     H.Flags.OrbitEnabled       = H.Flags.OrbitEnabled or false
     H.Flags.SilentAimHitChance = H.Flags.SilentAimHitChance or 100
-    H.Flags.Optimize           = H.Flags.Optimize or false
 
     H.RageMethod = "Method 2"
 
@@ -2077,42 +2076,6 @@ do
         end)
     end
 
-    -- Optimize: strip post-processing + restore-able effect state
-    H.OptimizeSaved = nil
-
-    function H.ApplyOptimize(on)
-        local EFFECT_CLASSES = {
-            "BloomEffect", "BlurEffect", "SunRaysEffect",
-            "DepthOfFieldEffect", "ColorCorrectionEffect",
-            "ColorGradingEffect", "Atmosphere",
-        }
-        if on then
-            local saved = { effects = {}, shadows = H.Lighting.GlobalShadows }
-            for _, obj in ipairs(H.Lighting:GetChildren()) do
-                for _, cls in ipairs(EFFECT_CLASSES) do
-                    if obj:IsA(cls) then
-                        saved.effects[obj] = obj.Enabled
-                        pcall(function() obj.Enabled = false end)
-                        break
-                    end
-                end
-            end
-            H.OptimizeSaved = saved
-            pcall(function() H.Lighting.GlobalShadows = false end)
-        else
-            local saved = H.OptimizeSaved
-            if saved then
-                for obj, state in pairs(saved.effects) do
-                    if obj.Parent then pcall(function() obj.Enabled = state end) end
-                end
-                if saved.shadows ~= nil then
-                    pcall(function() H.Lighting.GlobalShadows = saved.shadows end)
-                end
-                H.OptimizeSaved = nil
-            end
-        end
-    end
-
     function H.ApplyFullbright()
         if H.Flags.Fullbright then
             H.Lighting.Brightness = 2
@@ -3583,6 +3546,232 @@ do
     end)()
 end
 
+-- ============================================================
+-- [BULLET TP] standalone GunHandler aimbot, wired to a toggle
+-- ============================================================
+do
+    local Players = H.Players
+    local RS      = H.ReplicatedStorage
+    local LP      = H.LocalPlayer
+    local Mouse   = LP:GetMouse()
+
+    local WEAPONS = {
+        ["[Revolver]"]         = true,
+        ["[Double-Barrel SG]"] = true,
+        ["[TacticalShotgun]"]  = true,
+    }
+
+    local DETECT_RANGE = 9999999999999999999999999999
+    local SAFE_MARGIN  = 2
+
+    H.WB_CFG = { Enabled = false }
+
+    local GH
+    local origGetAim, origTrace, origShoot
+    local inHook = false
+
+    -- drop hooks left behind by a previous execution of this script
+    if getgenv().__WB_OLDNC then
+        pcall(function() hookmetamethod(game, "__namecall", getgenv().__WB_OLDNC) end)
+        getgenv().__WB_OLDNC = nil
+    end
+    if getgenv().__WB_prev and getgenv().__WB_prev.Module then
+        pcall(function()
+            local p = getgenv().__WB_prev
+            if p.GetAim then p.Module.GetAim = p.GetAim end
+            if p.Trace  then p.Module.Trace  = p.Trace  end
+            if p.Shoot  then p.Module.Shoot  = p.Shoot  end
+        end)
+    end
+    getgenv().__WB_prev = nil
+
+    pcall(function()
+        LP:SetAttribute("AimbotInfRange", nil)
+    end)
+
+    local function getGH()
+        if GH then return GH end
+        local mods = RS:FindFirstChild("Modules") or RS:WaitForChild("Modules", 10)
+        if not mods then return nil end
+        local gun = mods:FindFirstChild("GunHandler") or mods:WaitForChild("GunHandler", 10)
+        if not gun then return nil end
+        local ok, mod = pcall(require, gun)
+        if not ok or typeof(mod) ~= "table" then return nil end
+        GH = mod
+        return GH
+    end
+
+    local function isArmed()
+        local char = LP.Character
+        if not char then return false end
+        local kids = char:GetChildren()
+        for i = 1, #kids do
+            local c = kids[i]
+            if c:IsA("Tool") and WEAPONS[c.Name] then return true end
+        end
+        return false
+    end
+
+    local function pickTarget(origin)
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local vp = cam.ViewportSize
+        if vp.X <= 0 or vp.Y <= 0 then return nil end
+
+        local crossX, crossY
+        if _G.PCShiftLocked or _G.MobileShiftLock or _G.ControllerShiftLock then
+            crossX, crossY = vp.X * 0.5, vp.Y * 0.5
+        else
+            crossX, crossY = Mouse.X, Mouse.Y
+        end
+
+        local look = cam.CFrame.LookVector
+        local best, bestScore = nil, math.huge
+        local players = Players:GetPlayers()
+
+        for i = 1, #players do
+            local plr = players[i]
+            if plr ~= LP then
+                local char = plr.Character
+                if char then
+                    local hum = char.Humanoid
+                    local hrp = char.HumanoidRootPart
+                    if hum and hrp and hum.Health > 0 then
+                        local p = hrp.Position
+                        local vx, vy, vz = p.X - origin.X, p.Y - origin.Y, p.Z - origin.Z
+                        if vx*look.X + vy*look.Y + vz*look.Z > 0 then
+                            local distSq = vx*vx + vy*vy + vz*vz
+                            if distSq <= DETECT_RANGE * DETECT_RANGE then
+                                local sp, onScreen = cam:WorldToViewportPoint(p)
+                                if onScreen then
+                                    local dx = sp.X - crossX
+                                    local dy = sp.Y - crossY
+                                    local score = dx*dx + dy*dy
+                                    if score < bestScore then
+                                        best, bestScore = hrp, score
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    function H.WBInstall()
+        local mod = getGH()
+        if not mod then return false end
+        if origGetAim then return true end
+
+        origGetAim = mod.GetAim
+        origTrace  = mod.Trace
+        origShoot  = mod.Shoot
+        getgenv().__WB_prev = { Module = mod, GetAim = origGetAim, Trace = origTrace, Shoot = origShoot }
+
+        mod.GetAim = function(origin)
+            if inHook or typeof(origin) ~= "Vector3" or not isArmed() then
+                return origGetAim(origin)
+            end
+            inHook = true
+            local ok, r1, r2 = pcall(function()
+                local target = pickTarget(origin)
+                if target then
+                    local d = target.Position - origin
+                    return d.Unit, d.Magnitude
+                end
+                return origGetAim(origin)
+            end)
+            inHook = false
+            if ok then return r1, r2 end
+            return origGetAim(origin)
+        end
+
+        mod.Trace = function(opts)
+            if inHook or not opts or not opts.Handle then return origTrace(opts) end
+            local tool = opts.Handle.Parent
+            if not tool or not WEAPONS[tool.Name] then return origTrace(opts) end
+
+            inHook = true
+            local ok, r1, r2, r3 = pcall(function()
+                local origin = opts.ForcedOrigin
+                if not origin then
+                    local muzzle = opts.Handle:FindFirstChild("Muzzle")
+                    origin = muzzle and muzzle.WorldPosition or opts.Handle.Position
+                end
+                if not origin then return origTrace(opts) end
+
+                local target = pickTarget(origin)
+                if not target then return origTrace(opts) end
+
+                local toT  = target.Position - origin
+                local dist = toT.Magnitude
+                local maxR = math.max(1, (opts.Range or 200) - SAFE_MARGIN)
+
+                if dist > maxR then
+                    return origin + toT.Unit * maxR, target, Vector3.new(0, 1, 0)
+                end
+                return target.Position, target, Vector3.new(0, 1, 0)
+            end)
+            inHook = false
+            if ok then return r1, r2, r3 end
+            return origTrace(opts)
+        end
+
+        mod.Shoot = function(opts)
+            if inHook or not opts then return origShoot(opts) end
+
+            inHook = true
+            local ok = pcall(function()
+                local hitInst = opts.HitInstance or opts.AimLockPart or opts.Hit
+                if typeof(hitInst) == "Instance" and hitInst:IsA("BasePart") and hitInst.Parent then
+                    local realPos = hitInst.Position
+                    opts.HitPosition = realPos
+                    if opts.AimPosition ~= nil then
+                        opts.AimPosition = realPos
+                    end
+                    if typeof(opts.Range) ~= "number" or opts.Range < 9999999999999999999999999999 then
+                        opts.Range = 9999999999999999999999999999
+                    end
+                end
+            end)
+            inHook = false
+
+            if ok then return origShoot(opts) end
+            return origShoot(opts)
+        end
+
+        return true
+    end
+
+    function H.WBUninstall()
+        local mod = GH
+        if mod then
+            if origGetAim then pcall(function() mod.GetAim = origGetAim end) end
+            if origTrace  then pcall(function() mod.Trace  = origTrace  end) end
+            if origShoot  then pcall(function() mod.Shoot  = origShoot  end) end
+        end
+        origGetAim, origTrace, origShoot = nil, nil, nil
+        inHook = false
+        getgenv().__WB_prev = nil
+        pcall(function() LP:SetAttribute("AimbotInfRange", nil) end)
+    end
+
+    function H.WBSetEnabled(on)
+        H.WB_CFG.Enabled = on and true or false
+        if H.WB_CFG.Enabled then
+            if not H.WBInstall() then
+                H.WB_CFG.Enabled = false
+                return false
+            end
+        else
+            H.WBUninstall()
+        end
+        return true
+    end
+end
+
 do
     local LocalPlayer = H.LocalPlayer
     local RunService = H.RunService
@@ -3608,13 +3797,14 @@ do
         H.Flags.RageSpectate = false
         H.Flags.VoidLoop = false
         H.Flags.OrbitEnabled = false
-        H.Flags.Optimize = false
-        pcall(H.ApplyOptimize, false)
         pcall(H.StopOrbit)
         H.Flags.FollowEnabled = false
         if H.StopFollow then pcall(H.StopFollow) end
         H.Flags.AutoFight = false
         if H.StopAutoFight then pcall(H.StopAutoFight) end
+        -- [BULLET TP] tear the GunHandler hooks down on panic
+        H.Flags.WBAimbotEnabled = false
+        if H.WB_CFG and H.WB_CFG.Enabled then pcall(H.WBSetEnabled, false) end
         H.RageTargets = {}
         H.RageTargetReady = {}
         H.RageWaitingRespawn = {}
@@ -3710,6 +3900,22 @@ do
         SilentSection:Toggle({ Name = "Wall Check", Flag = "SilentAimWallCheck", Default = false, Callback = function(v) H_.Flags.SilentAimWallCheck = v end })
         SilentSection:Toggle({ Name = "Team Check", Flag = "SilentAimTeamCheck", Default = true, Callback = function(v) H_.Flags.SilentAimTeamCheck = v end })
         SilentSection:Toggle({ Name = "No Spread", Flag = "NoSpread", Default = false, Callback = function(v) H_.Flags.NoSpread = v end })
+
+        -- [BULLET TP]
+        local BulletTPSection = SilentTab:Section({ Name = "Bullet TP", Side = "Right" })
+        BulletTPSection:Toggle({
+            Name = "Bullet TP",
+            Flag = "WBAimbotEnabled",
+            Default = false,
+            Callback = function(v)
+                H_.Flags.WBAimbotEnabled = v
+                local ok = H_.WBSetEnabled(v)
+                if v and not ok then
+                    H_.Flags.WBAimbotEnabled = false
+                    Arvn_:Notify({ Title = "Bullet TP", Content = "GunHandler module not found", Kind = "Warning" })
+                end
+            end,
+        })
     end
 
     do
@@ -4212,22 +4418,6 @@ do
 
     do
         local VisualTab = Group:Tab({ Name = "Visuals / ESP", Icon = "eye" })
-
-        local OptimizeSection = VisualTab:Section({ Name = "Optimize", Side = "Left" })
-        OptimizeSection:Toggle({
-            Name = "Optimize (kill effects)",
-            Flag = "Optimize",
-            Default = false,
-            Callback = function(v)
-                H_.Flags.Optimize = v
-                pcall(H_.ApplyOptimize, v)
-            end,
-        })
-        OptimizeSection:Paragraph({
-            Title = "Note",
-            Content = "Disables post-processing (Bloom, Blur, DOF, SunRays, ColorCorrection, Atmosphere, shadows) and turns off bullet tracers and gun chams for FPS.",
-        })
-
         local TracerSection = VisualTab:Section({ Name = "Bullet Tracers", Side = "Right" })
         TracerSection:Toggle({ Name = "Bullet Tracers", Flag = "BulletTracers", Default = false, Callback = function(v) H_.Flags.BulletTracers = v end })
         TracerSection:ColorPicker({ Name = "Tracer Color", Flag = "BulletTracerColor", Default = Color3.fromRGB(255, 80, 80) })
@@ -4277,7 +4467,7 @@ do
         end
         -- Hide the game's own bullet visuals so only the custom tracer shows
         local function hideGameBullet(obj)
-            if not H_.Flags.BulletTracers or H_.Flags.Optimize then return end
+            if not H_.Flags.BulletTracers then return end
             local name = obj.Name:lower()
             local byName = name == "gunbeam" or name:find("pellet") or name == "bullet"
             local byShot = os.clock() - lastShot < 0.75 and (obj:IsA("Beam") or obj:IsA("Trail"))
@@ -4449,7 +4639,7 @@ do
         if hookmetamethod and newcclosure and getnamecallmethod then
             local oldNamecall
             oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-                if H_.Flags.BulletTracers and not H_.Flags.Optimize and getnamecallmethod() == "FireServer" and not checkcaller()
+                if H_.Flags.BulletTracers and getnamecallmethod() == "FireServer" and not checkcaller()
                     and typeof(self) == "Instance" and self.Name == "MainRemoteEvent" then
                     local kind, handle, origin, pellets, aim = ...
                     if kind == "ShootGun" then
@@ -4563,7 +4753,7 @@ do
         end
         local chamsWasOn = false
         H_.RunService.RenderStepped:Connect(function()
-            if (H_.Flags.SelfChams or H_.Flags.GunChams) and not H_.Flags.Optimize then
+            if H_.Flags.SelfChams or H_.Flags.GunChams then
                 chamsWasOn = true
                 pcall(applyChams)
             elseif chamsWasOn or next(chamsOriginals) ~= nil or chamsHighlight then
@@ -5702,6 +5892,8 @@ do
                 task.defer(function()
                     H_.PanicAll()
                     H_.Flags.Desync = false
+                    -- [BULLET TP]
+                    pcall(H_.WBSetEnabled, false)
                     H_.DestroyWhitelistGUI()
                     for _, c in ipairs(H_.Connections) do pcall(function() c:Disconnect() end) end
                     H_.Connections = {}
