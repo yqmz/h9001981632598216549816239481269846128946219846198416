@@ -4295,6 +4295,20 @@ do
         CrossSection:Toggle({ Name = "Spin", Flag = "CrosshairSpin", Default = false, Callback = function(v) H_.Flags.CrosshairSpin = v end })
         CrossSection:Toggle({ Name = "Follow Mouse", Flag = "CrosshairFollowMouse", Default = false, Callback = function(v) H_.Flags.CrosshairFollowMouse = v end })
         CrossSection:ColorPicker({ Name = "Color", Flag = "CrosshairColor", Default = Color3.fromRGB(255, 255, 255) })
+        CrossSection:Paragraph({
+            Title = "Note",
+            Content = "change crosshair id to this id for the best result: 94643450",
+        })
+        CrossSection:Button({
+            Name = "Copy Crosshair ID",
+            Callback = function()
+                local fn = setclipboard or toclipboard
+                if fn then
+                    H_.SafeCall(fn, "94643450")
+                    Arvn_:Notify({ Title = "Crosshair", Content = "Copied 94643450", Kind = "Info" })
+                end
+            end,
+        })
 
         -- Force the game's own cursor/crosshair to the script's image while enabled
         do
