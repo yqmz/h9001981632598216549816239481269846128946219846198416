@@ -4567,11 +4567,11 @@ do
             Callback = function(v)
                 H_.Flags.Optimize = v
                 H_.ApplyOptimize(v)
-                Arvn_:Notify({ Title = "Optimize", Content = v and "Low gfx: chams/tracers/glow off" or "Rejoin to restore render distance", Kind = "Info" })
+                Arvn_:Notify({ Title = "Optimize", Content = v and "Low gfx: chams/tracers/glow off" or "Change graphics quality in settings to restore render distance", Kind = "Info" })
             end,
         })
         
-        PerfSection:Paragraph({ Title = "Optimize", Content = "Turns off fps intensive processing (permanently lowers graphics quality rejoin to fix)." })
+        PerfSection:Paragraph({ Title = "Optimize", Content = "Turns off fps intensive processing (Change graphics quality in settings to restore render distance)." })
 
         local TracerSection = VisualTab:Section({ Name = "Bullet Tracers", Side = "Right" })
         TracerSection:Toggle({ Name = "Bullet Tracers", Flag = "BulletTracers", Default = false, Callback = function(v) H_.Flags.BulletTracers = v end })
