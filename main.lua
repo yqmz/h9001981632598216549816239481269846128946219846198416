@@ -60,6 +60,8 @@ do
     H.Flags.WLColorShift       = H.Flags.WLColorShift or 180
     H.Flags.OptimizeRenderDistance = H.Flags.OptimizeRenderDistance or 400
 
+    if H.Flags.AntiFlingCollide == nil then H.Flags.AntiFlingCollide = false end
+
     H.RageMethod = "Method 2"
 
     H.Connections     = {}
@@ -2045,6 +2047,43 @@ do
         end)
     end
 
+   
+    --================ ANTI FLING (NO COLLIDE) ================
+    H.AntiFlingCollideConn = nil
+    H.AntiFlingFlipped = setmetatable({}, { __mode = "k" })
+
+    function H.ApplyAntiFlingCollide(on)
+        if H.AntiFlingCollideConn then
+            H.AntiFlingCollideConn:Disconnect()
+            H.AntiFlingCollideConn = nil
+        end
+
+        if not on then
+            for p in pairs(H.AntiFlingFlipped) do
+                if p.Parent then pcall(function() p.CanCollide = true end) end
+                H.AntiFlingFlipped[p] = nil
+            end
+            return
+        end
+
+        H.AntiFlingCollideConn = H.RunService.Stepped:Connect(function()
+            if not H.Flags.AntiFlingCollide then return end
+            for _, plr in ipairs(H.Players:GetPlayers()) do
+                if plr ~= H.LocalPlayer then
+                    local char = plr.Character
+                    if char then
+                        for _, p in ipairs(char:GetDescendants()) do
+                            if p:IsA("BasePart") and p.CanCollide then
+                                p.CanCollide = false
+                                H.AntiFlingFlipped[p] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
     function H.ApplyAnchor()
         local hrp = H.GetHRP()
         if hrp then hrp.Anchored = H.Flags.Anchor end
@@ -3929,6 +3968,8 @@ do
         H.Flags.RapidFire = false
         H.Flags.AutoStomp = false
         H.Flags.HitboxEnabled = false
+        H.Flags.AntiFlingCollide = false
+        pcall(H.ApplyAntiFlingCollide, false)
         H.Flags.TriggerEnabled = false
         H.Flags.RageAutoKill = false
         H.Flags.RageSentry = false
@@ -5855,6 +5896,10 @@ do
         MiscSection:Toggle({ Name = "AutoArmor", Flag = "AutoArmor", Default = false, Callback = function(v) H_.Flags.AutoArmor = v end })
         MiscSection:Toggle({ Name = "AutoStim", Flag = "AutoStim", Default = false, Callback = function(v) H_.Flags.AutoStim = v end })
         MiscSection:Toggle({ Name = "Anti AFK", Flag = "AntiAFK", Default = false, Callback = function(v) H_.Flags.AntiAFK = v H_.ApplyAntiAFK() end })
+        MiscSection:Toggle({ Name = "Anti Fling", Flag = "AntiFlingCollide", Default = false, Callback = function(v)
+            H_.Flags.AntiFlingCollide = v
+            H_.ApplyAntiFlingCollide(v)
+        end })
 
         function H_.StopAntiAim()
             if H_.AntiAimConn then H_.AntiAimConn:Disconnect() H_.AntiAimConn = nil end
@@ -6026,6 +6071,7 @@ do
                     H_.StopSpeedLoop()
                     H_.StopVoidLoop()
                     H_.StopOrbit()
+                    pcall(H_.ApplyAntiFlingCollide, false)
                     if H_.FOVCircle then pcall(function() H_.FOVCircle:Remove() end) H_.FOVCircle = nil end
                     if H_.SilentFOVCircle then pcall(function() H_.SilentFOVCircle:Remove() end) H_.SilentFOVCircle = nil end
                     if H_.Watermark then pcall(function() H_.Watermark:Remove() end) H_.Watermark = nil end
@@ -6337,5 +6383,5 @@ do
         end)
     end)
 
-    Arvn:Notify({ Title = "houhou", Content = "(https://discord.gg/Tddht8WW8Y)", Kind = "uwu" })
+    Arvn:Notify({ Title = "houhou", Content = "(https://discord.gg/feuds)", Kind = "uwu" })
 end
