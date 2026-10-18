@@ -55,6 +55,10 @@ do
     H.Flags.NoSpread           = H.Flags.NoSpread or false
     H.Flags.OrbitEnabled       = H.Flags.OrbitEnabled or false
     H.Flags.SilentAimHitChance = H.Flags.SilentAimHitChance or 100
+    H.Flags.Optimize           = H.Flags.Optimize or false
+    if H.Flags.WhitelistIgnore == nil then H.Flags.WhitelistIgnore = true end
+    H.Flags.WLColorShift       = H.Flags.WLColorShift or 180
+    H.Flags.OptimizeRenderDistance = H.Flags.OptimizeRenderDistance or 400
 
     H.RageMethod = "Method 2"
 
@@ -231,6 +235,20 @@ do
         return c
     end
 
+    function H.OppositeColor(c)
+        local col = H.NormalizeColor(c, Color3.new(1, 1, 1))
+        local h, s, v = Color3.toHSV(col)
+        if s < 0.15 then s = 1; v = math.max(v, 0.85) end
+        h = (h + ((H.Flags.WLColorShift or 180) / 360)) % 1
+        return Color3.fromHSV(h, s, v)
+    end
+
+    function H.ESPColor(plr, flagName, default)
+        local c = H.NormalizeColor(H.Flags[flagName], default)
+        if plr and H.IsWhitelisted(plr) then return H.OppositeColor(c) end
+        return c
+    end
+
     function H.SafeCall(fn, ...)
         local ok, err = pcall(fn, ...)
         if not ok then warn("[houhou] " .. tostring(err)) end
@@ -289,6 +307,12 @@ do
     function H.IsWhitelisted(plr)
         if not plr then return false end
         return H.Whitelist[plr.UserId] == true or H.Whitelist[plr.Name] == true
+    end
+
+    function H.WLIgnore(plr)
+        if not plr then return false end
+        if H.Flags.WhitelistIgnore == false then return false end
+        return H.IsWhitelisted(plr)
     end
 
     function H.HasForceField(plr)
@@ -394,7 +418,7 @@ do
 
     function H.OrbitGetFirstValid()
         for _, t in ipairs(H.OrbitGetTargets()) do
-            if H.IsAlive(t) and not H.HasForceField(t) then return t end
+            if H.IsAlive(t) and not H.HasForceField(t) and not H.WLIgnore(t) then return t end
         end
         return nil
     end
@@ -620,6 +644,7 @@ do
 
         local function PassesChecksForSticky(plr)
             if not plr or plr == LocalPlayer then return false end
+            if H.WLIgnore(plr) then return false end
             if not H.IsAlive(plr) then return false end
             if H.Flags.AimbotTeamCheck and H.HasTeam(plr) then return false end
             if H.Flags.AimbotKnockedCheck and H.IsKnocked(plr) then return false end
@@ -785,6 +810,7 @@ do
                 local c = plr.Character
                 if c then
                     local skip = false
+                    if H.WLIgnore(plr) then skip = true end
                     if H.Flags.SilentAimTeamCheck and H.HasTeam(plr) then skip = true end
                     if not skip and H.Flags.SilentAimKnockedCheck and H.IsKnocked(plr) then skip = true end
                     if not skip then
@@ -1268,6 +1294,7 @@ do
         for _, l in ipairs(tracer.lines) do l.Visible = false end
         local tType = H.Flags.ESPTracerType or "Off"
         if tType == "Off" then return end
+        if H.Flags.Optimize then return end
         if not H.IsFiniteVec2(screenPos) then return end
 
         local origin
@@ -1276,7 +1303,7 @@ do
         elseif originType == "Center" then origin = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         else origin = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y) end
 
-        local color = H.NormalizeColor(H.Flags.ESPTracerColor, Color3.new(1, 1, 1))
+        local color = H.ESPColor(plr, "ESPTracerColor", Color3.new(1, 1, 1))
 
         if tType == "Straight" then
             local l = tracer.lines[1]
@@ -1419,11 +1446,11 @@ do
                                         if H.Flags.ESPBoxType == "2D" and H.IsFinite(boxH) and boxH > 0 and boxH < 5000 then
                                             obj.box.Size = Vector2.new(boxW, boxH)
                                             obj.box.Position = Vector2.new(topPos.X - boxW / 2, boxTopY)
-                                            obj.box.Color = H.NormalizeColor(H.Flags.ESPBoxColor, Color3.fromRGB(255, 255, 255))
+                                            obj.box.Color = H.ESPColor(plr, "ESPBoxColor", Color3.fromRGB(255, 255, 255))
                                             obj.box.Visible = true
                                             if obj.boxGlow then
                                                 for _, g in ipairs(obj.boxGlow) do
-                                                    if H.Flags.ESPGlowingBoxes then
+                                                    if H.Flags.ESPGlowingBoxes and not H.Flags.Optimize then
                                                         g.Size = obj.box.Size
                                                         g.Position = obj.box.Position
                                                         g.Color = obj.box.Color
@@ -1457,7 +1484,7 @@ do
                                                 end
                                             end
                                             if allOn then
-                                                local col = H.NormalizeColor(H.Flags.ESPBoxColor, Color3.fromRGB(255, 255, 255))
+                                                local col = H.ESPColor(plr, "ESPBoxColor", Color3.fromRGB(255, 255, 255))
                                                 local edges = {{1,2},{3,4},{5,6},{7,8},{1,3},{2,4},{5,7},{6,8},{1,5},{2,6},{3,7},{4,8}}
                                                 for i, e in ipairs(edges) do
                                                     local l = obj.box3d[i]
@@ -1467,7 +1494,7 @@ do
                                                     l.Visible = true
                                                     local g = obj.box3dGlow and obj.box3dGlow[i]
                                                     if g then
-                                                        if H.Flags.ESPGlowingBoxes then
+                                                        if H.Flags.ESPGlowingBoxes and not H.Flags.Optimize then
                                                             g.From = l.From
                                                             g.To = l.To
                                                             g.Color = col
@@ -1489,7 +1516,7 @@ do
                                     if obj.name then
                                         if H.Flags.ESPName and H.HAS_DRAWING then
                                             obj.name.Text = (H.Flags.ESPNameType == "Display") and plr.DisplayName or plr.Name
-                                            obj.name.Color = H.NormalizeColor(H.Flags.ESPNameColor, Color3.new(1, 1, 1))
+                                            obj.name.Color = H.ESPColor(plr, "ESPNameColor", Color3.new(1, 1, 1))
                                             obj.name.Size = H.GetScaledTextSize(16, 12, boxH)
                                             obj.name.Position = Vector2.new(pos.X, boxTopY - 18)
                                             obj.name.Visible = true
@@ -1514,7 +1541,7 @@ do
                                                 obj.healthBar.Size = Vector2.new(barW, boxH * pct)
                                                 obj.healthBar.Position = Vector2.new(leftX, topY)
                                             end
-                                            local hc = H.NormalizeColor(H.Flags.ESPHealthColor, Color3.fromRGB(0, 255, 0))
+                                            local hc = H.ESPColor(plr, "ESPHealthColor", Color3.fromRGB(0, 255, 0))
                                             obj.healthBar.Color = Color3.fromRGB(255, 0, 0):Lerp(hc, pct)
                                             obj.healthBar.Visible = true
                                         else
@@ -1525,7 +1552,7 @@ do
                                     if obj.distance then
                                         if H.Flags.ESPDistance and H.HAS_DRAWING then
                                             obj.distance.Text = string.format("[%d]", math.floor(dist))
-                                            obj.distance.Color = H.NormalizeColor(H.Flags.ESPDistanceColor, Color3.new(1, 1, 1))
+                                            obj.distance.Color = H.ESPColor(plr, "ESPDistanceColor", Color3.new(1, 1, 1))
                                             obj.distance.Size = H.GetScaledTextSize(14, 12, boxH)
                                             obj.distance.Position = Vector2.new(pos.X, boxTopY + boxH + 2)
                                             obj.distance.Visible = true
@@ -1539,7 +1566,7 @@ do
                                             local tool = char:FindFirstChildOfClass("Tool")
                                             if tool then
                                                 obj.toolTxt.Text = tool.Name
-                                                obj.toolTxt.Color = H.NormalizeColor(H.Flags.ESPToolColor, Color3.fromRGB(0, 255, 0))
+                                                obj.toolTxt.Color = H.ESPColor(plr, "ESPToolColor", Color3.fromRGB(0, 255, 0))
                                                 obj.toolTxt.Size = H.GetScaledTextSize(14, 12, boxH)
                                                 obj.toolTxt.Position = Vector2.new(pos.X, boxTopY + boxH + (H.Flags.ESPDistance and 18 or 2))
                                                 obj.toolTxt.Visible = true
@@ -1552,8 +1579,8 @@ do
                                     end
 
                                     if obj.highlight then
-                                        if H.Flags.ESPGlow then
-                                            local c = H.NormalizeColor(H.Flags.ESPGlowColor, Color3.fromRGB(255, 255, 255))
+                                        if H.Flags.ESPGlow and not H.Flags.Optimize then
+                                            local c = H.ESPColor(plr, "ESPGlowColor", Color3.fromRGB(255, 255, 255))
                                             obj.highlight.FillColor = c
                                             obj.highlight.FillTransparency = 0.5
                                             obj.highlight.OutlineColor = c
@@ -1569,7 +1596,7 @@ do
                                         if obj.nameLbl then
                                             if H.Flags.ESPName then
                                                 obj.nameLbl.Text = (H.Flags.ESPNameType == "Display") and plr.DisplayName or plr.Name
-                                                obj.nameLbl.TextColor3 = H.NormalizeColor(H.Flags.ESPNameColor, Color3.new(1, 1, 1))
+                                                obj.nameLbl.TextColor3 = H.ESPColor(plr, "ESPNameColor", Color3.new(1, 1, 1))
                                                 obj.nameLbl.Visible = true
                                             else
                                                 obj.nameLbl.Visible = false
@@ -1578,7 +1605,7 @@ do
                                         if obj.distLbl then
                                             if H.Flags.ESPDistance then
                                                 obj.distLbl.Text = string.format("[%d]", math.floor(dist))
-                                                obj.distLbl.TextColor3 = H.NormalizeColor(H.Flags.ESPDistanceColor, Color3.new(1, 1, 1))
+                                                obj.distLbl.TextColor3 = H.ESPColor(plr, "ESPDistanceColor", Color3.new(1, 1, 1))
                                                 obj.distLbl.Visible = true
                                             else
                                                 obj.distLbl.Visible = false
@@ -1589,7 +1616,7 @@ do
                                                 local tool = char:FindFirstChildOfClass("Tool")
                                                 if tool then
                                                     obj.toolLbl.Text = tool.Name
-                                                    obj.toolLbl.TextColor3 = H.NormalizeColor(H.Flags.ESPToolColor, Color3.fromRGB(0, 255, 0))
+                                                    obj.toolLbl.TextColor3 = H.ESPColor(plr, "ESPToolColor", Color3.fromRGB(0, 255, 0))
                                                     obj.toolLbl.Visible = true
                                                 else
                                                     obj.toolLbl.Visible = false
@@ -1602,7 +1629,7 @@ do
                                             if H.Flags.ESPHealth and not H.HAS_DRAWING then
                                                 obj.hpBg.Visible = true
                                                 obj.hpFill.Size = UDim2.new(pct, 0, 1, 0)
-                                                obj.hpFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0):Lerp(H.NormalizeColor(H.Flags.ESPHealthColor, Color3.fromRGB(0, 255, 0)), pct)
+                                                obj.hpFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0):Lerp(H.ESPColor(plr, "ESPHealthColor", Color3.fromRGB(0, 255, 0)), pct)
                                             else
                                                 obj.hpBg.Visible = false
                                             end
@@ -2112,6 +2139,130 @@ do
         end
     end
 
+    H.OptimizeSaved = nil
+
+    function H.GetRenderDistance()
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local ok, val = pcall(function() return cam.FarPlaneZ end)
+        if ok and type(val) == "number" then return val end
+        return nil
+    end
+
+    function H.SetRenderDistance(dist)
+        if not dist then return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        pcall(function() sethiddenproperty(cam, "FarPlaneZ", dist) end)
+        pcall(function() cam.FarPlaneZ = dist end)
+    end
+
+    function H.ApplyOptimize(on)
+        local L = H.Lighting
+        local UserGameSettings
+        pcall(function() UserGameSettings = UserSettings():GetService("UserGameSettings") end)
+
+        if on then
+            if not H.OptimizeSaved then
+                local saved = { effects = {}, particles = {} }
+                saved.GlobalShadows            = L.GlobalShadows
+                saved.ShadowSoftness           = L.ShadowSoftness
+                saved.EnvironmentDiffuseScale  = L.EnvironmentDiffuseScale
+                saved.EnvironmentSpecularScale = L.EnvironmentSpecularScale
+                saved.FarPlaneZ                = H.GetRenderDistance()
+                for _, c in ipairs(L:GetChildren()) do
+                    if c:IsA("PostEffect") then
+                        saved.effects[c] = c.Enabled
+                    elseif c:IsA("Atmosphere") then
+                        saved.atmos = saved.atmos or {}
+                        table.insert(saved.atmos, { inst = c, density = c.Density })
+                    end
+                end
+                pcall(function() saved.QualityLevel = settings().Rendering.QualityLevel end)
+                if UserGameSettings then
+                    pcall(function() saved.SavedQuality = UserGameSettings.SavedQualityLevel end)
+                    pcall(function() saved.MeshDetail = UserGameSettings.MeshPartDetailLevel end)
+                end
+                pcall(function() saved.TerrainDecoration = workspace.Terrain.Decoration end)
+                for _, d in ipairs(workspace:GetDescendants()) do
+                    if d:IsA("ParticleEmitter") or d:IsA("Fire") or d:IsA("Smoke") or d:IsA("Sparkles") then
+                        saved.particles[d] = d.Enabled
+                    end
+                end
+                H.OptimizeSaved = saved
+            end
+
+            pcall(function() L.GlobalShadows = false end)
+            pcall(function() L.ShadowSoftness = 0 end)
+            pcall(function() L.EnvironmentDiffuseScale = 0 end)
+            pcall(function() L.EnvironmentSpecularScale = 0 end)
+            for _, c in ipairs(L:GetChildren()) do
+                if c:IsA("PostEffect") then pcall(function() c.Enabled = false end) end
+            end
+            if H.OptimizeSaved.atmos then
+                for _, a in ipairs(H.OptimizeSaved.atmos) do
+                    if a.inst and a.inst.Parent then pcall(function() a.inst.Density = 0 end) end
+                end
+            end
+            pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+            if UserGameSettings then
+                pcall(function() UserGameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1 end)
+                pcall(function() UserGameSettings.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level01 end)
+            end
+            pcall(function() workspace.Terrain.Decoration = false end)
+            H.SetRenderDistance(H.Flags.OptimizeRenderDistance or 400)
+            for inst in pairs(H.OptimizeSaved.particles) do
+                if inst.Parent then pcall(function() inst.Enabled = false end) end
+            end
+        else
+            local saved = H.OptimizeSaved
+            if saved then
+                pcall(function() L.GlobalShadows = saved.GlobalShadows end)
+                pcall(function() L.ShadowSoftness = saved.ShadowSoftness end)
+                pcall(function() L.EnvironmentDiffuseScale = saved.EnvironmentDiffuseScale end)
+                pcall(function() L.EnvironmentSpecularScale = saved.EnvironmentSpecularScale end)
+                for c, en in pairs(saved.effects) do
+                    if c and c.Parent then pcall(function() c.Enabled = en end) end
+                end
+                if saved.atmos then
+                    for _, a in ipairs(saved.atmos) do
+                        if a.inst and a.inst.Parent then pcall(function() a.inst.Density = a.density end) end
+                    end
+                end
+                if saved.QualityLevel ~= nil then
+                    pcall(function() settings().Rendering.QualityLevel = saved.QualityLevel end)
+                end
+                if UserGameSettings then
+                    if saved.SavedQuality ~= nil then
+                        pcall(function() UserGameSettings.SavedQualityLevel = saved.SavedQuality end)
+                    end
+                    if saved.MeshDetail ~= nil then
+                        pcall(function() UserGameSettings.MeshPartDetailLevel = saved.MeshDetail end)
+                    end
+                end
+                pcall(function() workspace.Terrain.Decoration = saved.TerrainDecoration end)
+                H.SetRenderDistance(saved.FarPlaneZ)
+                task.defer(function() H.SetRenderDistance(saved.FarPlaneZ) end)
+                task.delay(0.1, function() H.SetRenderDistance(saved.FarPlaneZ) end)
+                for inst, en in pairs(saved.particles) do
+                    if inst.Parent then pcall(function() inst.Enabled = en end) end
+                end
+            end
+            H.OptimizeSaved = nil
+        end
+    end
+
+    H.AddConn(workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+        if not H.Flags.Optimize then return end
+        task.defer(function()
+            if not H.Flags.Optimize then return end
+            H.SetRenderDistance(H.Flags.OptimizeRenderDistance or 400)
+            for _, c in ipairs(H.Lighting:GetChildren()) do
+                if c:IsA("PostEffect") then pcall(function() c.Enabled = false end) end
+            end
+        end)
+    end))
+
     function H.GotoPlayer(plr)
         if not plr or not H.IsAlive(plr) then return end
         local my = H.GetHRP()
@@ -2180,7 +2331,7 @@ do
         if not H.Flags.AutoStomp or not H.MainRemote then return end
         local now = tick()
         for _, plr in ipairs(H.Players:GetPlayers()) do
-            if plr ~= LocalPlayer then
+            if plr ~= LocalPlayer and not H.WLIgnore(plr) then
                 local char = plr.Character
                 if not char then
                     H.AutoStompLast[plr] = nil
@@ -2312,7 +2463,7 @@ do
         local plr = H.Players:GetPlayerFromCharacter(model)
         if not plr then return nil end
         if plr == LocalPlayer then return nil end
-        if H.IsWhitelisted(plr) then return nil end
+        if H.WLIgnore(plr) then return nil end
         if H.HasForceField(plr) then return nil end
         if H.Flags.TriggerTeamCheck and H.HasTeam(plr) then return nil end
         if H.Flags.TriggerKnockedCheck and H.IsKnocked(plr) then return nil end
@@ -2634,6 +2785,7 @@ do
 
     function H.RageCanShoot(plr)
         if not plr or not plr.Parent or plr == LocalPlayer then return false end
+        if H.WLIgnore(plr) then return false end
         if not H.RageTargetReady[plr] then return false end
         if not H.RageIsFullyLoaded(plr) then return false end
         local knocked, grabbed = H.IsKO(plr)
@@ -2920,6 +3072,7 @@ do
 
     function H.RageTryTP(plr)
         if not H.Flags.RageTPAuto or not H.Flags.RageAutoKill then return end
+        if H.WLIgnore(plr) then return end
         if H.RageTPQueue then return end
         local knocked = H.IsKO(plr)
         if not knocked then return end
@@ -2944,6 +3097,7 @@ do
 
     function H.RageTryStomp(plr)
         if not H.Flags.RageAutoStomp or not H.Flags.RageAutoKill or not H.MainRemote then return end
+        if H.WLIgnore(plr) then return end
         local knocked = H.IsKO(plr)
         if not knocked then return end
         local now = tick()
@@ -2962,7 +3116,7 @@ do
         if now - H.RageLastStompAll < 0.4 then return end
         H.RageLastStompAll = now
         for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer then
+            if plr ~= LocalPlayer and not H.WLIgnore(plr) then
                 if H.IsKO(plr) then
                     pcall(function()
                         H.MainRemote:FireServer("Stomp")
@@ -3107,7 +3261,7 @@ do
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         for _, plr in ipairs(Players:GetPlayers()) do
-            local c = plr ~= LocalPlayer and plr.Character
+            local c = plr ~= LocalPlayer and not H.WLIgnore(plr) and plr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             local head = c and c:FindFirstChild("Head")
             local hum = c and c:FindFirstChildOfClass("Humanoid")
@@ -3500,7 +3654,8 @@ do
                 if plr ~= Services_LocalPlayer and plr.Parent then
                     if isAlive(plr) and isFullyLoaded(plr)
                        and not isKnocked(plr) and not isGrabbed(plr)
-                       and not hasForceField(plr) then
+                       and not hasForceField(plr)
+                       and not H.WLIgnore(plr) then
                         local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
                         if hrp then
                             local d = (hrp.Position - myHRP.Position).Magnitude
@@ -3617,7 +3772,7 @@ do
 
         for i = 1, #players do
             local plr = players[i]
-            if plr ~= LP then
+            if plr ~= LP and not H.WLIgnore(plr) then
                 local char = plr.Character
                 if char then
                     local hum = char.Humanoid
@@ -3790,6 +3945,8 @@ do
         if H.StopAutoFight then pcall(H.StopAutoFight) end
         H.Flags.WBAimbotEnabled = false
         if H.WB_CFG and H.WB_CFG.Enabled then pcall(H.WBSetEnabled, false) end
+        H.Flags.Optimize = false
+        pcall(H.ApplyOptimize, false)
         H.RageTargets = {}
         H.RageTargetReady = {}
         H.RageWaitingRespawn = {}
@@ -3944,7 +4101,8 @@ do
         end
         local function followTarget()
             local plr = H_.resolvePlayer(H_.Flags.FollowTarget)
-            if plr and plr ~= LocalPlayer and H_.IsAlive(plr) and not H_.HasForceField(plr) then return plr end
+            if plr and plr ~= LocalPlayer and H_.IsAlive(plr) and not H_.HasForceField(plr)
+                and not H_.WLIgnore(plr) then return plr end
             return nil
         end
         function H_.StartFollow()
@@ -4038,6 +4196,7 @@ do
             local chosen = H_.Flags.FollowTarget and H_.resolvePlayer(H_.Flags.FollowTarget)
             local function ok(p)
                 return p and p ~= LocalPlayer and H_.IsAlive(p) and not H_.IsKO(p) and not H_.HasForceField(p) and H_.RageGetHRP(p)
+                    and not H_.WLIgnore(p)
             end
             if ok(chosen) then return chosen end
             if H_.Flags.FollowTarget and chosen then return nil end
@@ -4221,6 +4380,9 @@ do
         TriggerCheckSection:Toggle({ Name = "Knocked Check", Flag = "TriggerKnockedCheck", Default = true, Callback = function(v) H_.Flags.TriggerKnockedCheck = v end })
 
         local WhitelistSection = TriggerTab:Section({ Name = "Whitelist", Side = "Right" })
+        WhitelistSection:Toggle({ Name = "Ignore Whitelisted (All PvP)", Flag = "WhitelistIgnore", Default = true, Callback = function(v) H_.Flags.WhitelistIgnore = v end })
+        WhitelistSection:Slider({ Name = "WL Highlight Shift (deg)", Flag = "WLColorShift", Min = 0, Max = 360, Default = 180, Callback = function(v) H_.Flags.WLColorShift = v end })
+        WhitelistSection:Paragraph({ Title = "Note", Content = "Whitelisted players are skipped by aim, silent, trigger, bullet TP, rage, kill all, orbit, follow, auto fight, sentry, stomp. They stay on ESP drawn in the opposite hue." })
         WhitelistSection:Button({ Name = "Open Whitelist Manager", Callback = function() task.defer(H_.BuildWhitelistGUI) end })
         WhitelistSection:Button({
             Name = "List Whitelist",
@@ -4397,6 +4559,20 @@ do
 
     do
         local VisualTab = Group:Tab({ Name = "Visuals / ESP", Icon = "eye" })
+        local PerfSection = VisualTab:Section({ Name = "Performance", Side = "Right" })
+        PerfSection:Toggle({
+            Name = "Optimize (FPS Boost)",
+            Flag = "Optimize",
+            Default = false,
+            Callback = function(v)
+                H_.Flags.Optimize = v
+                H_.ApplyOptimize(v)
+                Arvn_:Notify({ Title = "Optimize", Content = v and "Low gfx: chams/tracers/glow off" or "Rejoin to restore render distance", Kind = "Info" })
+            end,
+        })
+        
+        PerfSection:Paragraph({ Title = "Optimize", Content = "Turns off fps intensive processing (permanently lowers graphics quality rejoin to fix)." })
+
         local TracerSection = VisualTab:Section({ Name = "Bullet Tracers", Side = "Right" })
         TracerSection:Toggle({ Name = "Bullet Tracers", Flag = "BulletTracers", Default = false, Callback = function(v) H_.Flags.BulletTracers = v end })
         TracerSection:ColorPicker({ Name = "Tracer Color", Flag = "BulletTracerColor", Default = Color3.fromRGB(255, 80, 80) })
@@ -4444,7 +4620,7 @@ do
             end
         end
         local function hideGameBullet(obj)
-            if not H_.Flags.BulletTracers then return end
+            if not H_.Flags.BulletTracers or H_.Flags.Optimize then return end
             local name = obj.Name:lower()
             local byName = name == "gunbeam" or name:find("pellet") or name == "bullet"
             local byShot = os.clock() - lastShot < 0.75 and (obj:IsA("Beam") or obj:IsA("Trail"))
@@ -4612,7 +4788,7 @@ do
         if hookmetamethod and newcclosure and getnamecallmethod then
             local oldNamecall
             oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-                if H_.Flags.BulletTracers and getnamecallmethod() == "FireServer" and not checkcaller()
+                if H_.Flags.BulletTracers and not H_.Flags.Optimize and getnamecallmethod() == "FireServer" and not checkcaller()
                     and typeof(self) == "Instance" and self.Name == "MainRemoteEvent" then
                     local kind, handle, origin, pellets, aim = ...
                     if kind == "ShootGun" then
@@ -4705,7 +4881,7 @@ do
                 end
             end
             local glowTarget = gunOnly and tool or char
-            if H_.Flags.SelfChamsGlow and glowTarget then
+            if H_.Flags.SelfChamsGlow and not H_.Flags.Optimize and glowTarget then
                 if not chamsHighlight or chamsHighlight.Parent ~= glowTarget then
                     if chamsHighlight then chamsHighlight:Destroy() end
                     chamsHighlight = Instance.new("Highlight")
@@ -4724,7 +4900,7 @@ do
         end
         local chamsWasOn = false
         H_.RunService.RenderStepped:Connect(function()
-            if H_.Flags.SelfChams or H_.Flags.GunChams then
+            if (H_.Flags.SelfChams or H_.Flags.GunChams) and not H_.Flags.Optimize then
                 chamsWasOn = true
                 pcall(applyChams)
             elseif chamsWasOn or next(chamsOriginals) ~= nil or chamsHighlight then
@@ -4733,7 +4909,7 @@ do
             end
         end)
         H_.RunService.Stepped:Connect(function()
-            if not H_.Flags.SelfChamsCollide then return end
+            if not H_.Flags.SelfChamsCollide or H_.Flags.Optimize then return end
             for part in pairs(chamsOriginals) do
                 if part.Parent and not part.CanCollide then part.CanCollide = true end
             end
@@ -5860,6 +6036,7 @@ do
                     H_.Lighting.OutdoorAmbient = H_.oldLighting.OutdoorAmbient
                     H_.Lighting.FogEnd = H_.oldLighting.FogEnd
                     H_.Lighting.FogStart = H_.oldLighting.FogStart
+                    if H_.Flags.Optimize then pcall(H_.ApplyOptimize, false) end
                     local hum = H_.GetHum()
                     if hum then hum.WalkSpeed = 16 end
                     local hrp = H_.GetHRP()
