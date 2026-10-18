@@ -1570,7 +1570,7 @@ do
                                                 obj.toolTxt.Text = tool.Name
                                                 obj.toolTxt.Color = H.ESPColor(plr, "ESPToolColor", Color3.fromRGB(0, 255, 0))
                                                 obj.toolTxt.Size = H.GetScaledTextSize(14, 12, boxH)
-                                                obj.toolTxt.Position = Vector2.new(pos.X, boxTopY + boxH + (H.Flags.ESPDistance and 18 or 2))
+                                                obj.toolTxt.Position = Vector2.new(pos.X, boxTopY + boxH + 2 + (H.Flags.ESPDistance and 16 or 0))
                                                 obj.toolTxt.Visible = true
                                             else
                                                 obj.toolTxt.Visible = false
@@ -1596,7 +1596,7 @@ do
                                     if obj.billboard then
                                         obj.billboard.Enabled = true
                                         if obj.nameLbl then
-                                            if H.Flags.ESPName then
+                                            if H.Flags.ESPName and not H.HAS_DRAWING then
                                                 obj.nameLbl.Text = (H.Flags.ESPNameType == "Display") and plr.DisplayName or plr.Name
                                                 obj.nameLbl.TextColor3 = H.ESPColor(plr, "ESPNameColor", Color3.new(1, 1, 1))
                                                 obj.nameLbl.Visible = true
@@ -1605,7 +1605,7 @@ do
                                             end
                                         end
                                         if obj.distLbl then
-                                            if H.Flags.ESPDistance then
+                                            if H.Flags.ESPDistance and not H.HAS_DRAWING then
                                                 obj.distLbl.Text = string.format("[%d]", math.floor(dist))
                                                 obj.distLbl.TextColor3 = H.ESPColor(plr, "ESPDistanceColor", Color3.new(1, 1, 1))
                                                 obj.distLbl.Visible = true
@@ -1614,7 +1614,7 @@ do
                                             end
                                         end
                                         if obj.toolLbl then
-                                            if H.Flags.ESPTool then
+                                            if H.Flags.ESPTool and not H.HAS_DRAWING then
                                                 local tool = char:FindFirstChildOfClass("Tool")
                                                 if tool then
                                                     obj.toolLbl.Text = tool.Name
@@ -4026,7 +4026,7 @@ do
         local Window = Arvn_:CreateWindow({
             Title = "houhou",
             Author = "nokoo and a1j",
-            Version = "betaa",
+            Version = "Release v1.4",
             Folder = "houhou",
             Subtitle = "made by @rcy8 & @a1j",
             Theme = "Dark",
@@ -4421,7 +4421,7 @@ do
         TriggerCheckSection:Toggle({ Name = "Knocked Check", Flag = "TriggerKnockedCheck", Default = true, Callback = function(v) H_.Flags.TriggerKnockedCheck = v end })
 
         local WhitelistSection = TriggerTab:Section({ Name = "Whitelist", Side = "Right" })
-        WhitelistSection:Toggle({ Name = "Ignore Whitelisted (All PvP)", Flag = "WhitelistIgnore", Default = true, Callback = function(v) H_.Flags.WhitelistIgnore = v end })
+        WhitelistSection:Toggle({ Name = "Use whitelist", Flag = "WhitelistIgnore", Default = true, Callback = function(v) H_.Flags.WhitelistIgnore = v end })
         WhitelistSection:Slider({ Name = "WL Highlight Shift (deg)", Flag = "WLColorShift", Min = 0, Max = 360, Default = 180, Callback = function(v) H_.Flags.WLColorShift = v end })
         WhitelistSection:Paragraph({ Title = "Note", Content = "Whitelisted players are skipped by aim, silent, trigger, bullet TP, rage, kill all, orbit, follow, auto fight, sentry, stomp. They stay on ESP drawn in the opposite hue." })
         WhitelistSection:Button({ Name = "Open Whitelist Manager", Callback = function() task.defer(H_.BuildWhitelistGUI) end })
@@ -4979,7 +4979,7 @@ do
         PlayersSection:ColorPicker({ Name = "Box Color", Flag = "ESPBoxColor", Default = Color3.fromRGB(255, 255, 255) })
         PlayersSection:Toggle({ Name = "Name ESP", Flag = "ESPName", Default = false, Callback = function(v) H_.Flags.ESPName = v end })
         PlayersSection:ColorPicker({ Name = "Name Color", Flag = "ESPNameColor", Default = Color3.fromRGB(255, 255, 255) })
-        PlayersSection:Dropdown({ Name = "Name Type", Flag = "ESPNameType", Values = {"Normal", "Display"}, Default = "Normal", Callback = function(v) H_.Flags.ESPNameType = v end })
+        PlayersSection:Dropdown({ Name = "Name Type", Flag = "ESPNameType", Values = {"Username", "Display"}, Default = "Username", Callback = function(v) H_.Flags.ESPNameType = v end })
         PlayersSection:Toggle({ Name = "Health Bar", Flag = "ESPHealth", Default = false, Callback = function(v) H_.Flags.ESPHealth = v end })
         PlayersSection:ColorPicker({ Name = "Health Color", Flag = "ESPHealthColor", Default = Color3.fromRGB(0, 255, 0) })
         PlayersSection:Toggle({ Name = "Distance", Flag = "ESPDistance", Default = false, Callback = function(v) H_.Flags.ESPDistance = v end })
