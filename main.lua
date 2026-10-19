@@ -2048,7 +2048,6 @@ do
     end
 
    
-    --================ ANTI FLING (NO COLLIDE) ================
     H.AntiFlingCollideConn = nil
     H.AntiFlingFlipped = setmetatable({}, { __mode = "k" })
 
@@ -4303,6 +4302,8 @@ do
         function H_.StartAutoFight()
             H_.StopAutoFight()
             local gen = fightGen
+            local charConn
+            local resetting = false
             task.spawn(function()
                 local RS = game:GetService("RunService")
                 local home = H_.GetHRP() and H_.GetHRP().CFrame
@@ -4312,166 +4313,155 @@ do
                 end
                 if H_.MainRemote then pcall(function() H_.MainRemote:FireServer("ChangeSettings", "AutoReload", true) end) end
                 fightHome = home
-                local function resetUntilReady(tgt)
-                    local t0 = tick()
-                    local readySince = nil
-                    while fightGen == gen and H_.Flags.AutoFight and tick() - t0 < 60 do
-                        local ready = tgt and tgt.Parent and H_.IsAlive(tgt) and not H_.IsKO(tgt) and not H_.HasForceField(tgt)
-                        if ready then
-                            if not readySince then readySince = tick() end
-                            if tick() - readySince >= ((H_.Flags.AutoFightRespawnDelay or 0) / 1000) then break end
-                        else
-                            readySince = nil
+
+                local function isReady(tgt)
+                    return tgt and tgt.Parent and tgt.Character and H_.IsAlive(tgt)
+                        and not H_.IsKO(tgt) and not H_.HasForceField(tgt)
+                end
+
+                local function killSelf()
+                    local char = LocalPlayer.Character
+                    if not char then return end
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if not hum or hum.Health <= 0 then return end
+                    pcall(function() hum.Health = 0 end)
+                    if hum.Health > 0 then
+                        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Dead) end)
+                    end
+                end
+
+                local gunFlip = false
+                local function equipNextGun()
+                    local char = LocalPlayer.Character
+                    if not char then return end
+                    gunFlip = not gunFlip
+                    local name = gunFlip and "[TacticalShotgun]" or "[Double-Barrel SG]"
+                    for _ = 1, 60 do
+                        local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+                        local tool = char:FindFirstChild(name) or (bp and bp:FindFirstChild(name))
+                        if not tool then
+                            local other = gunFlip and "[Double-Barrel SG]" or "[TacticalShotgun]"
+                            tool = char:FindFirstChild(other) or (bp and bp:FindFirstChild(other))
                         end
-                        local oldChar = LocalPlayer.Character
-                        local hum = H_.GetHum()
-                        if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-                        local t1 = tick()
-                        repeat
+                        if tool then
+                            local hum = char:FindFirstChildOfClass("Humanoid")
+                            if hum and tool.Parent ~= char then pcall(function() hum:EquipTool(tool) end) end
+                            return
+                        end
+                        RS.Heartbeat:Wait()
+                    end
+                end
+
+                local function equipByName(name)
+                    local char = LocalPlayer.Character
+                    if not char then return nil end
+                    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+                    local tool = char:FindFirstChild(name) or (bp and bp:FindFirstChild(name))
+                    if not tool then return nil end
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if not hum then return nil end
+                    if tool.Parent ~= char then
+                        pcall(function() hum:EquipTool(tool) end)
+                        local t0 = tick()
+                        while tool.Parent ~= char and tick() - t0 < 0.3 do
                             RS.Heartbeat:Wait()
-                            local nc = LocalPlayer.Character
-                            local nh = nc and nc:FindFirstChildOfClass("Humanoid")
-                            if nc and nc ~= oldChar and nh and nh.Health > 0 then break end
-                        until fightGen ~= gen or tick() - t1 > 8
-                        if fightGen ~= gen then break end
+                        end
+                        RS.Heartbeat:Wait()
                     end
+                    return tool
                 end
-                while fightGen == gen and H_.Flags.AutoFight do
-                    local myHRP = H_.GetHRP()
-                    if not myHRP then task.wait(0.2) else
 
-                    fightGunIndex = 1
-                    local voidAng = math.random() * math.pi * 2
-                    local voidOrbT = tick()
-                    local voidRad = H_.Flags.AutoFightOrbitRadius or 40000
-                    local voidH = H_.Flags.AutoFightOrbitHeight or 20000
-                    local voidPos = Vector3.new(math.cos(voidAng) * voidRad, voidH, math.sin(voidAng) * voidRad)
-                    fightSetPlatform(true)
-                    task.spawn(function()
-                        local tool = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("[Double-Barrel SG]"))
-                            or (LocalPlayer:FindFirstChildOfClass("Backpack") and LocalPlayer.Backpack:FindFirstChild("[Double-Barrel SG]"))
-                        if not tool then return end
-                        local hum0 = H_.GetHum()
-                        if tool.Parent ~= LocalPlayer.Character and hum0 then pcall(function() hum0:EquipTool(tool) end) task.wait(0.1) end
-                        local ammo = tool:FindFirstChild("Ammo")
-                        if ammo and ammo.Value >= 2 then return end
-                        local hum = H_.GetHum()
-                        if tool.Parent ~= LocalPlayer.Character and hum then pcall(function() hum:EquipTool(tool) end) task.wait(0.1) end
-                        pcall(H_.TriggerReloadTool, tool)
+                local function shootGun(target, gun)
+                    if not H_.MainRemote or not gun or not gun:FindFirstChild("Handle") then return false end
+                    if gun.Parent ~= LocalPlayer.Character then return false end
+                    local hitbox = H_.RageGetHitbox(target)
+                    local aimPos = hitbox and H_.RageGetAimPosition(hitbox)
+                    if not aimPos then return false end
+                    local handle = gun:FindFirstChild("Handle")
+                    local stats = H_.RageGetWeaponStats(gun)
+                    local origin = handle.Position
+                    local dir = (aimPos - origin).Unit
+                    local ammo = gun:FindFirstChild("Ammo")
+                    if ammo and ammo.Value <= 0 then
+                        H_.TriggerReloadTool(gun)
+                        return false
+                    end
+                    local ok = pcall(function()
+                        if H_.RageIsShotgun(gun) then
+                            local pellets = {}
+                            for i = 1, 5 do
+                                table.insert(pellets, H_.RageBuildPellet(origin, aimPos, hitbox, dir))
+                            end
+                            H_.MainRemote:FireServer("ShootGun", handle, origin, pellets, nil, nil, nil, stats.range, stats.damage)
+                        else
+                            local result1 = origin + dir * 12.8
+                            H_.MainRemote:FireServer("ShootGun", handle, origin, nil, aimPos, hitbox, dir, stats.range, stats.damage, result1, nil)
+                        end
                     end)
-                    local tEnd = tick() + (H_.Flags.AutoFightVoidTime or 0.5)
-                    repeat
-                        local h = H_.GetHRP()
-                        if h then
-                            if H_.Flags.AutoFightFastOrbit then
-                                local nt = tick()
-                                voidAng = voidAng + math.rad(H_.Flags.AutoFightOrbitSpeed or 4000) * (nt - voidOrbT)
-                                voidOrbT = nt
-                                voidPos = Vector3.new(math.cos(voidAng) * voidRad, voidH, math.sin(voidAng) * voidRad)
-                            end
-                            pcall(function()
-                                h.AssemblyLinearVelocity = Vector3.zero
-                                h.AssemblyAngularVelocity = Vector3.zero
-                                h.CFrame = CFrame.new(voidPos)
-                            end)
-                        end
-                        RS.Heartbeat:Wait()
-                    until fightGen ~= gen or tick() >= tEnd
-                    if fightGen ~= gen then return end
+                    if ok then H_.TriggerReloadTool(gun) end
+                    return ok
+                end
 
-                    local target = fightPickTarget()
-                    if not target then
-                        local pend = fightPickAny()
-                        if pend and H_.Flags.AutoReset and (not H_.IsAlive(pend) or H_.HasForceField(pend)) then
-                            resetUntilReady(pend)
-                        end
-                    elseif H_.Flags.AutoReset and H_.HasForceField(target) then
-                        resetUntilReady(target)
-                    else
+                charConn = LocalPlayer.CharacterAdded:Connect(function()
+                    if fightGen ~= gen then return end
+                    task.spawn(function()
+                        task.wait(0.03)
+                        if fightGen ~= gen then return end
+                        equipNextGun()
+                        if resetting then killSelf() end
+                    end)
+                end)
+                if LocalPlayer.Character then equipNextGun() end
+
+                while fightGen == gen and H_.Flags.AutoFight do
                     fightSetPlatform(false)
-                    RS.Heartbeat:Wait()
-                    local lastFire, shots = 0, 0
-                    local startHp = math.huge
-                    local orbAng, orbT = math.random() * math.pi * 2, tick()
-                    local function orbitStep()
-                        local hrp, tHRP = H_.GetHRP(), H_.RageGetHRP(target)
-                        if not hrp or not tHRP then return end
-                        local orad = H_.Flags.OrbitDistance or 14
-                        local nowT = tick()
-                        local spd = H_.Flags.OrbitSpeed or 250
-                        if H_.Flags.AutoFightFastOrbit then
-                            spd = math.max(spd, H_.Flags.AutoFightOrbitSpeed or 4000)
-                        end
-                        orbAng = orbAng + (spd / math.max(orad, 1)) * (nowT - orbT)
-                        orbT = nowT
-                        local pos = tHRP.Position + Vector3.new(math.cos(orbAng) * orad, H_.Flags.OrbitHeight or 2, math.sin(orbAng) * orad)
-                        pcall(function()
-                            hrp.AssemblyLinearVelocity = Vector3.zero
-                            hrp.CFrame = CFrame.new(pos, tHRP.Position)
-                        end)
-                    end
-                    do
-                        local th = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
-                        if th then startHp = th.Health end
-                    end
-                    local arrived = tick()
-                    local deadline = tick() + 2.5
-                    local killed = false
-                    while fightGen == gen and tick() < deadline and shots < 8 do
-                        local hrp = H_.GetHRP()
-                        local tHRP = H_.RageGetHRP(target)
-                        local head = H_.RageGetHead(target)
-                        if not hrp or not tHRP or not head or not H_.IsAlive(target) or H_.IsKO(target) or H_.HasForceField(target) then
-                            if fightTargetDown(target) then killed = true end
-                            break
-                        end
-                        local vel = tHRP.AssemblyLinearVelocity
-                        local flat = Vector3.new(vel.X, 0, vel.Z)
-                        local dir = flat.Magnitude > 1 and flat.Unit or Vector3.new(tHRP.CFrame.LookVector.X, 0, tHRP.CFrame.LookVector.Z).Unit
-                        orbitStep()
-                        if tick() - arrived >= (H_.Flags.AutoFightShotDelay or 0.1) and tick() - lastFire >= 0.05 then
-                            local tool = fightPickGun()
-                            if tool then
-                                local ammoV = tool:FindFirstChild("Ammo")
-                                if ammoV and ammoV.Value <= 0 then
-                                    pcall(H_.TriggerReloadTool, tool)
-                                    local alt = fightOtherGun(tool)
-                                    local altAmmo = alt and alt:FindFirstChild("Ammo")
-                                    if alt and (not altAmmo or altAmmo.Value > 0) then
-                                        tool = alt
-                                    else
-                                        break
-                                    end
-                                end
-                                lastFire = tick()
-                                shots = shots + 1
-                                H_.followRedirectPart = head
-                                local hum = H_.GetHum()
-                                if tool.Parent ~= LocalPlayer.Character and hum then pcall(function() hum:EquipTool(tool) end) task.wait(0.1) end
-                                if not (H_.DirectShoot and H_.DirectShoot(target, tool)) then
-                                    pcall(function() tool:Activate() end)
-                                end
-                                fightAdvanceGun()
-                                local hold = tick() + (H_.Flags.AutoFightShotDelay or 0.1)
-                                while fightGen == gen and tick() < hold do orbitStep() RS.Heartbeat:Wait() end
-                                local thum = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
-                                if shots >= 3 or not thum or thum.Health < startHp or H_.IsKO(target) then break end
-                                if tick() - lastFire < 0.3 then
-                                    local w = tick() + 0.3 - (tick() - lastFire)
-                                    while fightGen == gen and tick() < w do orbitStep() RS.Heartbeat:Wait() end
-                                end
-                            end
-                        end
+                    local target = fightPickTarget() or fightPickAny()
+                    if not target then
                         RS.Heartbeat:Wait()
-                    end
-                    H_.followRedirectPart = nil
-                    if fightTargetDown(target) then killed = true end
-                    if (killed or H_.HasForceField(target)) and H_.Flags.AutoReset then
-                        resetUntilReady(target)
-                    end
-                    end
+                    else
+                        -- PHASE 1: reset until target has spawned and been alive for 1 full second
+                        local need = (H_.Flags.AutoFightRespawnDelay or 1000) / 1000
+                        local t0 = tick()
+                        local readySince = nil
+                        resetting = true
+                        while fightGen == gen and H_.Flags.AutoFight and tick() - t0 < 120 do
+                            if isReady(target) then
+                                if not readySince then readySince = tick() end
+                                if tick() - readySince >= need then break end
+                            else
+                                readySince = nil
+                            end
+                            if H_.IsAlive(LocalPlayer) then
+                                killSelf()
+                            end
+                            RS.Heartbeat:Wait()
+                        end
+                        resetting = false
+                        if fightGen ~= gen then break end
+                        local tw = tick()
+                        while fightGen == gen and H_.Flags.AutoFight and not H_.IsAlive(LocalPlayer) and tick() - tw < 5 do
+                            RS.Heartbeat:Wait()
+                        end
+
+                        -- PHASE 2: DB then Tac, alternating until they're down, then reset
+                        local deadline = tick() + 8
+                        while fightGen == gen and H_.Flags.AutoFight and tick() < deadline do
+                            if not target.Parent or not isReady(target) then break end
+
+                            local db = equipByName("[Double-Barrel SG]")
+                            if db then shootGun(target, db) end
+                            if fightGen ~= gen or not target.Parent or not isReady(target) then break end
+
+                            local tac = equipByName("[TacticalShotgun]")
+                            if tac then shootGun(target, tac) end
+
+                            RS.Heartbeat:Wait()
+                        end
+
+                        killSelf()
                     end
                 end
+                if charConn then charConn:Disconnect() charConn = nil end
                 if fightGen == gen then H_.StopAutoFight() end
             end)
         end
@@ -4490,25 +4480,9 @@ do
                 end
             end,
         })
-        if H_.Flags.AutoReset == nil then H_.Flags.AutoReset = false end
-        if H_.Flags.AutoFightFastOrbit == nil then H_.Flags.AutoFightFastOrbit = true end
-        if H_.Flags.AutoFightOrbitSpeed == nil then H_.Flags.AutoFightOrbitSpeed = 4000 end
-        if H_.Flags.AutoFightOrbitRadius == nil then H_.Flags.AutoFightOrbitRadius = 40000 end
-        if H_.Flags.AutoFightOrbitHeight == nil then H_.Flags.AutoFightOrbitHeight = 20000 end
-        if H_.Flags.AutoFightGunCycle == nil then H_.Flags.AutoFightGunCycle = true end
         if H_.Flags.AutoFightRespawnDelay == nil then H_.Flags.AutoFightRespawnDelay = 1000 end
-        FightSec:Toggle({ Name = "Auto Reset", Flag = "AutoReset", Default = false, Callback = function(v) H_.Flags.AutoReset = v end })
-        FightSec:Toggle({ Name = "Fast Void", Flag = "AutoFightFastOrbit", Default = true, Callback = function(v) H_.Flags.AutoFightFastOrbit = v end })
-        FightSec:Slider({ Name = "Fast Void Speed (deg/s)", Flag = "AFOrbitSpeed", Min = 500, Max = 500000, Default = 4000, Callback = function(v) H_.Flags.AutoFightOrbitSpeed = v end })
-        FightSec:Slider({ Name = "Orbit Radius", Flag = "AFOrbitRadius", Min = 500, Max = 500000, Default = 40000, Callback = function(v) H_.Flags.AutoFightOrbitRadius = v end })
-        FightSec:Slider({ Name = "Void Height", Flag = "AFOrbitHeight", Min = -50000, Max = 500000, Default = 20000, Callback = function(v) H_.Flags.AutoFightOrbitHeight = v end })
-        FightSec:Toggle({ Name = "Gun Cycle (DB <-> Tac)", Flag = "AutoFightGunCycle", Default = true, Callback = function(v) H_.Flags.AutoFightGunCycle = v end })
-        FightSec:Slider({ Name = "Respawn Delay (ms)", Flag = "AFRespawnDelay", Min = 0, Max = 15000, Default = 1000, Callback = function(v) H_.Flags.AutoFightRespawnDelay = v end })
-        H_.Flags.AutoFightVoidTime = 0.5
-        H_.Flags.AutoFightShotDelay = 0.1
-        FightSec:Slider({ Name = "Void Time (ms)", Flag = "AFVoidMs", Min = 100, Max = 5000, Default = 500, Callback = function(v) H_.Flags.AutoFightVoidTime = (tonumber(v) or 500) / 1000 end })
-        FightSec:Slider({ Name = "Shot Delay (ms)", Flag = "AFShotMs", Min = 20, Max = 1000, Default = 100, Callback = function(v) H_.Flags.AutoFightShotDelay = (tonumber(v) or 100) / 1000 end })
-        FightSec:Paragraph({ Title = "Note", Content = "Uses the Follow target if set, otherwise the nearest player. Double-Barrel only. Auto Reset respawns you once the target is down." })
+        FightSec:Slider({ Name = "Alive Time (ms)", Flag = "AFRespawnDelay", Min = 0, Max = 15000, Default = 1000, Callback = function(v) H_.Flags.AutoFightRespawnDelay = v end })
+        FightSec:Paragraph({ Title = "Note", Content = "Uses the Follow target if set, otherwise the nearest player. Resets until the target has been alive for the set time, kills with Method 1, then repeats. Swaps DB <-> Tac on every respawn." })
 
         local OrbitTargetsSec = OrbitTab:Section({ Name = "Orbit Targets", Side = "Right" })
         OrbitTargetsSec:Dropdown({ Name = "Target 1", Flag = "OrbitTarget1", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget1 = v end })
