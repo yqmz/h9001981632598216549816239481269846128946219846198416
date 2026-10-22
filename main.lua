@@ -804,7 +804,12 @@ do
         local now = tick()
         if now - H.SilentLastScan < 0.05 then return H.SilentCachedPart end
         H.SilentLastScan = now
-        local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        local center
+        if (H.Flags.SilentAimSelect or "Center") == "Mouse" then
+            center = H.GetMousePos()
+        else
+            center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        end
         local camPos = Camera.CFrame.Position
         local bestPart, bestScreen = nil, (H.Flags.SilentAimFOV or 150)
         for _, plr in ipairs(Players:GetPlayers()) do
@@ -1517,7 +1522,9 @@ do
 
                                     if obj.name then
                                         if H.Flags.ESPName and H.HAS_DRAWING then
-                                            obj.name.Text = (H.Flags.ESPNameType == "Display") and plr.DisplayName or plr.Name
+                                            local nameType = H.Flags.ESPNameType
+                                            if type(nameType) == "table" then nameType = nameType[1] end
+                                            obj.name.Text = (nameType == "Display") and plr.DisplayName or plr.Name
                                             obj.name.Color = H.ESPColor(plr, "ESPNameColor", Color3.new(1, 1, 1))
                                             obj.name.Size = H.GetScaledTextSize(16, 12, boxH)
                                             obj.name.Position = Vector2.new(pos.X, boxTopY - 18)
@@ -1597,7 +1604,9 @@ do
                                         obj.billboard.Enabled = true
                                         if obj.nameLbl then
                                             if H.Flags.ESPName and not H.HAS_DRAWING then
-                                                obj.nameLbl.Text = (H.Flags.ESPNameType == "Display") and plr.DisplayName or plr.Name
+                                                local nameType = H.Flags.ESPNameType
+                                                if type(nameType) == "table" then nameType = nameType[1] end
+                                                obj.nameLbl.Text = (nameType == "Display") and plr.DisplayName or plr.Name
                                                 obj.nameLbl.TextColor3 = H.ESPColor(plr, "ESPNameColor", Color3.new(1, 1, 1))
                                                 obj.nameLbl.Visible = true
                                             else
@@ -2144,7 +2153,7 @@ do
             H.Lighting.Ambient = Color3.new(1, 1, 1)
             H.Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
         else
-            H.Lighting.Brightness = H.oldLighting.Brightness
+            H.Lighting.Brightness = H.Flags.Brightness or H.oldLighting.Brightness
             H.Lighting.ClockTime = H.oldLighting.ClockTime
             H.Lighting.Ambient = H.oldLighting.Ambient
             H.Lighting.OutdoorAmbient = H.oldLighting.OutdoorAmbient
@@ -3963,6 +3972,10 @@ do
         H.Flags.ESPEnabled = false
         H.Flags.SpeedEnabled = false
         H.Flags.FlyEnabled = false
+        H.Flags.Freecam = false
+        pcall(H.StopFreecam)
+        H.Flags.FreeRoam = false
+        pcall(H.StopFreeRoam, true)
         H.Flags.Noclip = false
         H.Flags.RapidFire = false
         H.Flags.AutoStomp = false
@@ -3979,8 +3992,6 @@ do
         H.Flags.VoidLoop = false
         H.Flags.OrbitEnabled = false
         pcall(H.StopOrbit)
-        H.Flags.FollowEnabled = false
-        if H.StopFollow then pcall(H.StopFollow) end
         H.Flags.AutoFight = false
         if H.StopAutoFight then pcall(H.StopAutoFight) end
         H.Flags.WBAimbotEnabled = false
@@ -4074,14 +4085,19 @@ do
         local SilentSection = SilentTab:Section("Silent Aim")
         SilentSection:Toggle({ Name = "Silent Aim Enabled", Flag = "SilentAimEnabled", Default = false, Keybind = "P", Callback = function(v) H_.Flags.SilentAimEnabled = v end })
         SilentSection:Dropdown({ Name = "Hit Part", Flag = "SilentAimHitPart", Values = {"Head", "HumanoidRootPart", "Closest"}, Default = "Head", Callback = function(v) H_.Flags.SilentAimHitPart = v end })
+        SilentSection:Dropdown({ Name = "Select By", Flag = "SilentAimSelect", Values = {"Center", "Mouse"}, Default = "Center", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.SilentAimSelect = v end })
         SilentSection:Slider({ Name = "FOV Radius", Flag = "SilentAimFOV", Min = 10, Max = 800, Default = 150, Callback = function(v) H_.Flags.SilentAimFOV = v end })
         SilentSection:Slider({ Name = "Hit Chance", Flag = "SilentAimHitChance", Min = 1, Max = 100, Default = 100, Callback = function(v) H_.Flags.SilentAimHitChance = v end })
         SilentSection:Toggle({ Name = "Show FOV Circle", Flag = "SilentAimShowFOV", Default = true, Callback = function(v) H_.Flags.SilentAimShowFOV = v end })
         SilentSection:ColorPicker({ Name = "FOV Color", Flag = "SilentAimFOVColor", Default = Color3.fromRGB(120, 180, 255) })
-        SilentSection:Toggle({ Name = "Knocked Check", Flag = "SilentAimKnockedCheck", Default = true, Callback = function(v) H_.Flags.SilentAimKnockedCheck = v end })
-        SilentSection:Toggle({ Name = "Wall Check", Flag = "SilentAimWallCheck", Default = false, Callback = function(v) H_.Flags.SilentAimWallCheck = v end })
-        SilentSection:Toggle({ Name = "Team Check", Flag = "SilentAimTeamCheck", Default = true, Callback = function(v) H_.Flags.SilentAimTeamCheck = v end })
+        local SilentCheckSection = SilentTab:Section({ Name = "Checks", Side = "Right" })
+        SilentCheckSection:Toggle({ Name = "Knocked Check", Flag = "SilentAimKnockedCheck", Default = true, Callback = function(v) H_.Flags.SilentAimKnockedCheck = v end })
+        SilentCheckSection:Toggle({ Name = "Wall Check", Flag = "SilentAimWallCheck", Default = false, Callback = function(v) H_.Flags.SilentAimWallCheck = v end })
+        SilentCheckSection:Toggle({ Name = "Team Check", Flag = "SilentAimTeamCheck", Default = true, Callback = function(v) H_.Flags.SilentAimTeamCheck = v end })
         SilentSection:Toggle({ Name = "No Spread", Flag = "NoSpread", Default = false, Callback = function(v) H_.Flags.NoSpread = v end })
+        SilentSection:Toggle({ Name = "Visualize Silent Aim", Flag = "SilentAimVisualize", Default = true, Callback = function(v) H_.Flags.SilentAimVisualize = v end })
+        SilentSection:ColorPicker({ Name = "Visualize Color", Flag = "SilentAimVisualizeColor", Default = Color3.fromRGB(255, 50, 50) })
+        SilentSection:Slider({ Name = "Visualize Thickness", Flag = "SilentAimVisualizeThickness", Min = 1, Max = 5, Default = 2, Callback = function(v) H_.Flags.SilentAimVisualizeThickness = v end })
 
         local BulletTPSection = SilentTab:Section({ Name = "Bullet TP", Side = "Right" })
         BulletTPSection:Toggle({
@@ -4100,117 +4116,10 @@ do
     end
 
     do
-        local OrbitTab = Group:Tab({ Name = "Orbit / Follow", Icon = "orbit" })
-        local OrbitMain = OrbitTab:Section({ Name = "Orbit Settings", Side = "Left" })
-        OrbitMain:Toggle({
-            Name = "Orbit Enabled",
-            Flag = "OrbitEnabled",
-            Default = false,
-            Keybind = "O",
-            Callback = function(v)
-                if v and #H_.OrbitGetTargets() == 0 then
-                    H_.Flags.OrbitEnabled = false
-                    Arvn_:Notify({ Title = "Orbit", Content = "Select a valid target first", Kind = "Warning" })
-                    return
-                end
-                H_.Flags.OrbitEnabled = v
-                if v then H_.StartOrbit() else H_.StopOrbit() end
-            end,
-        })
-        OrbitMain:Slider({ Name = "Speed (u/s)", Flag = "OrbitSpeed", Min = 50, Max = 1200, Default = 250, Callback = function(v) H_.Flags.OrbitSpeed = v end })
-        OrbitMain:Slider({ Name = "Distance", Flag = "OrbitDistance", Min = 3, Max = 80, Default = 14, Callback = function(v) H_.Flags.OrbitDistance = v end })
-        OrbitMain:Slider({ Name = "Height", Flag = "OrbitHeight", Min = -20, Max = 40, Default = 2, Callback = function(v) H_.Flags.OrbitHeight = v end })
-        OrbitMain:Slider({ Name = "Random Z", Flag = "OrbitRandZ", Min = 0, Max = 180, Default = 90, Callback = function(v) H_.Flags.OrbitRandZ = v end })
-        OrbitMain:Slider({ Name = "Random X", Flag = "OrbitRandX", Min = 0, Max = 180, Default = 60, Callback = function(v) H_.Flags.OrbitRandX = v end })
-        OrbitMain:Slider({ Name = "Chaos", Flag = "OrbitChaos", Min = 0, Max = 100, Default = 70, Callback = function(v) H_.Flags.OrbitChaos = v end })
-        OrbitMain:Toggle({ Name = "Noclip", Flag = "OrbitNoclip", Default = true, Callback = function(v) H_.Flags.OrbitNoclip = v end })
-
-        function H_.StopFollow(keepHome)
-            if H_.FollowConn then H_.FollowConn:Disconnect() H_.FollowConn = nil end
-            H_.followRedirectPart = nil
-            if keepHome then return end
-            local home = H_.followHome
-            H_.followHome = nil
-            local hrp = H_.GetHRP()
-            if home and hrp then
-                pcall(function()
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.CFrame = home
-                end)
-            end
-        end
-        local function followTarget()
-            local plr = H_.resolvePlayer(H_.Flags.FollowTarget)
-            if plr and plr ~= LocalPlayer and H_.IsAlive(plr) and not H_.HasForceField(plr)
-                and not H_.WLIgnore(plr) then return plr end
-            return nil
-        end
-        function H_.StartFollow()
-            H_.StopFollow(true)
-            if not H_.followHome then
-                local h0 = H_.GetHRP()
-                H_.followHome = h0 and h0.CFrame
-            end
-            local lastFire = 0
-            H_.FollowConn = game:GetService("RunService").Heartbeat:Connect(function()
-                if not H_.Flags.FollowEnabled then return H_.StopFollow() end
-                local target = followTarget()
-                local myHRP = H_.GetHRP()
-                local tHRP = target and H_.RageGetHRP(target)
-                if not myHRP or not tHRP or H_.IsKO(target) then
-                    H_.followRedirectPart = nil
-                    return
-                end
-                local vel = tHRP.AssemblyLinearVelocity
-                local flat = Vector3.new(vel.X, 0, vel.Z)
-                local dir = flat.Magnitude > 1 and flat.Unit or Vector3.new(tHRP.CFrame.LookVector.X, 0, tHRP.CFrame.LookVector.Z).Unit
-                local predicted = tHRP.Position + vel * 0.1
-                local dist = H_.Flags.FollowDistance or 10
-                local pos = predicted + dir * dist + Vector3.new(0, H_.Flags.FollowHeight or 0, 0)
-                pcall(function()
-                    myHRP.AssemblyLinearVelocity = Vector3.zero
-                    myHRP.CFrame = CFrame.new(pos, Vector3.new(tHRP.Position.X, pos.Y, tHRP.Position.Z))
-                end)
-                if H_.Flags.FollowShoot == false then H_.followRedirectPart = nil return end
-                local head = H_.RageGetHead(target)
-                if head and tick() - lastFire >= 0.05 then
-                    lastFire = tick()
-                    local lpl = LocalPlayer
-                    local tool = (lpl.Character and lpl.Character:FindFirstChild("[Double-Barrel SG]"))
-                        or (lpl:FindFirstChildOfClass("Backpack") and lpl.Backpack:FindFirstChild("[Double-Barrel SG]"))
-                    if tool then
-                        H_.followRedirectPart = head
-                        local hum = H_.GetHum()
-                        if tool.Parent ~= LocalPlayer.Character and hum then pcall(function() hum:EquipTool(tool) end) end
-                        pcall(function() tool:Activate() end)
-                    end
-                end
-            end)
-        end
-        local FollowTab = OrbitTab
-        local FollowSec = FollowTab:Section({ Name = "Follow Settings", Side = "Left" })
-        local FollowTargetSec = FollowTab:Section({ Name = "Follow Target", Side = "Right" })
-        FollowTargetSec:Dropdown({ Name = "Target", Flag = "FollowTarget", Special = "Players", Callback = function(v) H_.Flags.FollowTarget = v end })
-        FollowSec:Toggle({
-            Name = "Follow",
-            Flag = "FollowEnabled",
-            Default = false,
-            Callback = function(v)
-                if v and not followTarget() then
-                    H_.Flags.FollowEnabled = false
-                    Arvn_:Notify({ Title = "Follow", Content = "Select a valid target first", Kind = "Warning" })
-                    return
-                end
-                H_.Flags.FollowEnabled = v
-                if v then H_.StartFollow() else H_.StopFollow() end
-            end,
-        })
-        FollowSec:Slider({ Name = "Follow Distance", Flag = "FollowDistance", Min = 3, Max = 40, Default = 10, Callback = function(v) H_.Flags.FollowDistance = v end })
-        FollowSec:Slider({ Name = "Follow Height", Flag = "FollowHeight", Min = -10, Max = 20, Default = 0, Callback = function(v) H_.Flags.FollowHeight = v end })
-        FollowSec:Toggle({ Name = "Follow Shoot", Flag = "FollowShoot", Default = true, Callback = function(v) H_.Flags.FollowShoot = v end })
 
         local fightGen = 0
         local fightHome
+
         local function fightSetPlatform(on)
             local hum = H_.GetHum()
             if hum then pcall(function()
@@ -4219,6 +4128,7 @@ do
                 if not on then hum:ChangeState(Enum.HumanoidStateType.GettingUp) end
             end) end
         end
+
         function H_.StopAutoFight()
             fightGen = fightGen + 1
             H_.followRedirectPart = nil
@@ -4232,14 +4142,15 @@ do
             fightHome = nil
             fightSetPlatform(false)
         end
+
         local function fightPickTarget()
-            local chosen = H_.Flags.FollowTarget and H_.resolvePlayer(H_.Flags.FollowTarget)
+            local chosen = H_.Flags.FightTarget and H_.resolvePlayer(H_.Flags.FightTarget)
             local function ok(p)
                 return p and p ~= LocalPlayer and H_.IsAlive(p) and not H_.IsKO(p) and not H_.HasForceField(p) and H_.RageGetHRP(p)
                     and not H_.WLIgnore(p)
             end
             if ok(chosen) then return chosen end
-            if H_.Flags.FollowTarget and chosen then return nil end
+            if H_.Flags.FightTarget and chosen then return nil end
             local myHRP = H_.GetHRP()
             local best, bestD = nil, math.huge
             for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
@@ -4250,41 +4161,10 @@ do
             end
             return best
         end
-        local function fightTargetDown(p)
-            if not p or not p.Character then return false end
-            if not H_.IsAlive(p) then return true end
-            return H_.IsKO(p)
-        end
-        local fightGunList = { "[Double-Barrel SG]", "[TacticalShotgun]" }
-        local fightGunIndex = 1
-        local function fightFindTool(name)
-            local char = LocalPlayer.Character
-            local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-            return (char and char:FindFirstChild(name)) or (bp and bp:FindFirstChild(name))
-        end
-        local function fightPickGun()
-            if not H_.Flags.AutoFightGunCycle then
-                return fightFindTool("[Double-Barrel SG]")
-            end
-            local tool = fightFindTool(fightGunList[fightGunIndex])
-            if tool then return tool end
-            return fightFindTool(fightGunList[fightGunIndex % #fightGunList + 1])
-        end
-        local function fightOtherGun(current)
-            for _, n in ipairs(fightGunList) do
-                local t = fightFindTool(n)
-                if t and t ~= current then return t end
-            end
-            return nil
-        end
-        local function fightAdvanceGun()
-            if H_.Flags.AutoFightGunCycle then
-                fightGunIndex = fightGunIndex % #fightGunList + 1
-            end
-        end
+
         local function fightPickAny()
-            if H_.Flags.FollowTarget then
-                local c = H_.resolvePlayer(H_.Flags.FollowTarget)
+            if H_.Flags.FightTarget then
+                local c = H_.resolvePlayer(H_.Flags.FightTarget)
                 if c and c ~= LocalPlayer and c.Parent and not H_.WLIgnore(c) then return c end
                 return nil
             end
@@ -4299,6 +4179,45 @@ do
             end
             return best
         end
+
+        local fightGunList = { "[Double-Barrel SG]", "[TacticalShotgun]" }
+        local fightGunIndex = 1
+
+        local function fightFindTool(name)
+            local char = LocalPlayer.Character
+            local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+            return (char and char:FindFirstChild(name)) or (bp and bp:FindFirstChild(name))
+        end
+
+        local function fightPickGun()
+            if not H_.Flags.AutoFightGunCycle then
+                return fightFindTool("[Double-Barrel SG]")
+            end
+            local tool = fightFindTool(fightGunList[fightGunIndex])
+            if tool then return tool end
+            return fightFindTool(fightGunList[fightGunIndex % #fightGunList + 1])
+        end
+
+        local function fightOtherGun(current)
+            for _, n in ipairs(fightGunList) do
+                local t = fightFindTool(n)
+                if t and t ~= current then return t end
+            end
+            return nil
+        end
+
+        local function fightAdvanceGun()
+            if H_.Flags.AutoFightGunCycle then
+                fightGunIndex = fightGunIndex % #fightGunList + 1
+            end
+        end
+
+        local function fightTargetDown(p)
+            if not p or not p.Character then return false end
+            if not H_.IsAlive(p) then return true end
+            return H_.IsKO(p)
+        end
+
         function H_.StartAutoFight()
             H_.StopAutoFight()
             local gen = fightGen
@@ -4419,7 +4338,6 @@ do
                     if not target then
                         RS.Heartbeat:Wait()
                     else
-                        -- PHASE 1: reset until target has spawned and been alive for 1 full second
                         local need = (H_.Flags.AutoFightRespawnDelay or 1000) / 1000
                         local t0 = tick()
                         local readySince = nil
@@ -4443,7 +4361,6 @@ do
                             RS.Heartbeat:Wait()
                         end
 
-                        -- PHASE 2: DB then Tac, alternating until they're down, then reset
                         local deadline = tick() + 8
                         while fightGen == gen and H_.Flags.AutoFight and tick() < deadline do
                             if not target.Parent or not isReady(target) then break end
@@ -4465,45 +4382,6 @@ do
                 if fightGen == gen then H_.StopAutoFight() end
             end)
         end
-        local FightSec = FollowTab:Section({ Name = "Auto Fight", Side = "Left" })
-        FightSec:Toggle({
-            Name = "Auto Fight",
-            Flag = "AutoFight",
-            Default = false,
-            Callback = function(v)
-                H_.Flags.AutoFight = v
-                if v then
-                    H_.StopFly()
-                    H_.StartAutoFight()
-                else
-                    H_.StopAutoFight()
-                end
-            end,
-        })
-        if H_.Flags.AutoFightRespawnDelay == nil then H_.Flags.AutoFightRespawnDelay = 1000 end
-        FightSec:Slider({ Name = "Alive Time (ms)", Flag = "AFRespawnDelay", Min = 0, Max = 15000, Default = 1000, Callback = function(v) H_.Flags.AutoFightRespawnDelay = v end })
-        FightSec:Paragraph({ Title = "Note", Content = "Uses the Follow target if set, otherwise the nearest player. Resets until the target has been alive for the set time, kills with Method 1, then repeats. Swaps DB <-> Tac on every respawn." })
-
-        local OrbitTargetsSec = OrbitTab:Section({ Name = "Orbit Targets", Side = "Right" })
-        OrbitTargetsSec:Dropdown({ Name = "Target 1", Flag = "OrbitTarget1", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget1 = v end })
-        OrbitTargetsSec:Dropdown({ Name = "Target 2", Flag = "OrbitTarget2", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget2 = v end })
-        OrbitTargetsSec:Dropdown({ Name = "Target 3", Flag = "OrbitTarget3", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget3 = v end })
-        OrbitTargetsSec:Button({
-            Name = "Clear Targets",
-            Callback = function()
-                H_.Flags.OrbitTarget1 = nil
-                H_.Flags.OrbitTarget2 = nil
-                H_.Flags.OrbitTarget3 = nil
-                H_.StopOrbitView()
-                Arvn_:Notify({ Title = "Orbit", Content = "Targets cleared", Kind = "Info" })
-            end,
-        })
-        OrbitTargetsSec:Button({ Name = "Cycle View Target", Callback = function() task.defer(H_.CycleOrbitView) end })
-        OrbitTargetsSec:Button({ Name = "Stop Viewing", Callback = function()
-            H_.StopOrbitView()
-            local hum = H_.GetHum()
-            if hum then pcall(function() H_.Camera.CameraSubject = hum end) end
-        end })
     end
 
     do
@@ -4520,7 +4398,7 @@ do
         local WhitelistSection = TriggerTab:Section({ Name = "Whitelist", Side = "Right" })
         WhitelistSection:Toggle({ Name = "Use whitelist", Flag = "WhitelistIgnore", Default = true, Callback = function(v) H_.Flags.WhitelistIgnore = v end })
         WhitelistSection:Slider({ Name = "WL Highlight Shift (deg)", Flag = "WLColorShift", Min = 0, Max = 360, Default = 180, Callback = function(v) H_.Flags.WLColorShift = v end })
-        WhitelistSection:Paragraph({ Title = "Note", Content = "Whitelisted players are skipped by aim, silent, trigger, bullet TP, rage, kill all, orbit, follow, auto fight, sentry, stomp. They stay on ESP drawn in the opposite hue." })
+        WhitelistSection:Paragraph({ Title = "Note", Content = "Whitelisted players will not be targeted by any rage/aimbot features." })
         WhitelistSection:Button({ Name = "Open Whitelist Manager", Callback = function() task.defer(H_.BuildWhitelistGUI) end })
         WhitelistSection:Button({
             Name = "List Whitelist",
@@ -4586,8 +4464,7 @@ do
             H_.Flags.KillAll = v
             H_.KillAllSet(v)
         end })
-        RageCombatSec:Toggle({ Name = "TP Auto KO", Flag = "RageTPAuto", Default = false, Callback = function(v) H_.Flags.RageTPAuto = v end })
-        RageCombatSec:Toggle({ Name = "Stomp Target", Flag = "RageAutoStomp", Default = false, Callback = function(v) H_.Flags.RageAutoStomp = v end })
+        RageCombatSec:Toggle({ Name = "Auto Stomp", Flag = "RageTPAuto", Default = false, Callback = function(v) H_.Flags.RageTPAuto = v end })
         RageCombatSec:Toggle({ Name = "Stomp All Knocked", Flag = "RageStompAll", Default = false, Callback = function(v) H_.Flags.RageStompAll = v end })
         RageCombatSec:Toggle({ Name = "Spectate Target", Flag = "RageSpectate", Default = false, Callback = function(v) H_.RageSetSpectate(v) end })
         RageCombatSec:Toggle({ Name = "Auto Switch Gun", Flag = "AutoSwitchGun", Default = false, Callback = function(v)
@@ -4639,16 +4516,106 @@ do
 
         RageSentrySec:Toggle({ Name = "Sentry Auto Stim", Flag = "SentryAutoStim", Default = false, Callback = function(v) H_.Flags.SentryAutoStim = v end })
         RageSentrySec:Toggle({ Name = "Sentry Auto Reload", Flag = "SentryAutoReload", Default = true, Callback = function(v) H_.Flags.SentryAutoReload = v end })
-
-        local RageMiscSec = RageTab:Section({ Name = "Misc", Side = "Right" })
-        RageMiscSec:Button({
+        RageSentrySec:Button({
             Name = "Sentry Return Home",
             Callback = function()
                 if H_.sentryVoided then H_.SentryReturnHome() end
             end,
         })
 
-        local MethodsSection = RageTab:Section({ Name = "Method Selector", Side = "Left" })
+        local OrbitSec = RageTab:Section({ Name = "Orbit", Side = "Left" })
+        OrbitSec:Toggle({
+            Name = "Orbit Enabled",
+            Flag = "OrbitEnabled",
+            Default = false,
+            Keybind = "O",
+            Callback = function(v)
+                if v and #H_.OrbitGetTargets() == 0 then
+                    H_.Flags.OrbitEnabled = false
+                    Arvn_:Notify({ Title = "Orbit", Content = "Select a valid target first", Kind = "Warning" })
+                    return
+                end
+                H_.Flags.OrbitEnabled = v
+                if v then H_.StartOrbit() else H_.StopOrbit() end
+            end,
+        })
+        OrbitSec:Slider({ Name = "Speed (u/s)", Flag = "OrbitSpeed", Min = 50, Max = 1200, Default = 250, Callback = function(v) H_.Flags.OrbitSpeed = v end })
+        OrbitSec:Slider({ Name = "Distance", Flag = "OrbitDistance", Min = 3, Max = 80, Default = 14, Callback = function(v) H_.Flags.OrbitDistance = v end })
+        OrbitSec:Slider({ Name = "Height", Flag = "OrbitHeight", Min = -20, Max = 40, Default = 2, Callback = function(v) H_.Flags.OrbitHeight = v end })
+        OrbitSec:Slider({ Name = "Random Z", Flag = "OrbitRandZ", Min = 0, Max = 180, Default = 90, Callback = function(v) H_.Flags.OrbitRandZ = v end })
+        OrbitSec:Slider({ Name = "Random X", Flag = "OrbitRandX", Min = 0, Max = 180, Default = 60, Callback = function(v) H_.Flags.OrbitRandX = v end })
+        OrbitSec:Slider({ Name = "Chaos", Flag = "OrbitChaos", Min = 0, Max = 100, Default = 70, Callback = function(v) H_.Flags.OrbitChaos = v end })
+        OrbitSec:Toggle({ Name = "Noclip", Flag = "OrbitNoclip", Default = true, Callback = function(v) H_.Flags.OrbitNoclip = v end })
+
+        local OrbitTargetsSec = RageTab:Section({ Name = "Orbit Targets", Side = "Right" })
+        OrbitTargetsSec:Dropdown({ Name = "Target 1", Flag = "OrbitTarget1", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget1 = v end })
+        OrbitTargetsSec:Dropdown({ Name = "Target 2", Flag = "OrbitTarget2", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget2 = v end })
+        OrbitTargetsSec:Dropdown({ Name = "Target 3", Flag = "OrbitTarget3", Special = "Players", Callback = function(v) H_.Flags.OrbitTarget3 = v end })
+        OrbitTargetsSec:Button({
+            Name = "Clear Targets",
+            Callback = function()
+                H_.Flags.OrbitTarget1 = nil
+                H_.Flags.OrbitTarget2 = nil
+                H_.Flags.OrbitTarget3 = nil
+                H_.StopOrbitView()
+                Arvn_:Notify({ Title = "Orbit", Content = "Targets cleared", Kind = "Info" })
+            end,
+        })
+        OrbitTargetsSec:Button({ Name = "Cycle View Target", Callback = function() task.defer(H_.CycleOrbitView) end })
+        OrbitTargetsSec:Button({ Name = "Stop Viewing", Callback = function()
+            H_.StopOrbitView()
+            local hum = H_.GetHum()
+            if hum then pcall(function() H_.Camera.CameraSubject = hum end) end
+        end })
+
+        local FightSec = RageTab:Section({ Name = "Auto Fight", Side = "Left" })
+        FightSec:Dropdown({ Name = "Fight Target", Flag = "FightTarget", Special = "Players", Callback = function(v) H_.Flags.FightTarget = v end })
+        FightSec:Toggle({
+            Name = "Auto Fight",
+            Flag = "AutoFight",
+            Default = false,
+            Callback = function(v)
+                H_.Flags.AutoFight = v
+                if v then
+                    H_.StopFly()
+                    H_.StartAutoFight()
+                else
+                    H_.StopAutoFight()
+                    if H_.Flags.FreeRoam or H_.FreeRoamPuppet then pcall(H_.StopFreeRoam, true) end
+                end
+            end,
+        })
+        if H_.Flags.AutoFightRespawnDelay == nil then H_.Flags.AutoFightRespawnDelay = 1000 end
+        FightSec:Slider({ Name = "Alive Time (ms)", Flag = "AFRespawnDelay", Min = 0, Max = 15000, Default = 1000, Callback = function(v) H_.Flags.AutoFightRespawnDelay = v end })
+        FightSec:Toggle({
+            Name = "Free Roam (puppet)",
+            Flag = "FreeRoam",
+            Default = false,
+            Callback = function(v)
+                v = v and true or false
+                H_.Flags.FreeRoam = v
+                if v then
+                    local ok, started, why = pcall(H_.StartFreeRoam)
+                    if not ok then
+                        Arvn_:Notify({ Title = "Free Roam", Content = "Puppet error: " .. tostring(started), Kind = "Warning" })
+                    elseif started == false then
+                        Arvn_:Notify({ Title = "Free Roam", Content = "Puppet pending: " .. tostring(why), Kind = "Info" })
+                    else
+                        Arvn_:Notify({ Title = "Free Roam", Content = "Puppet spawned", Kind = "Success" })
+                    end
+                else
+                    pcall(H_.StopFreeRoam)
+                end
+            end,
+        })
+        if H_.Flags.FreeRoamSpeed == nil then H_.Flags.FreeRoamSpeed = 22 end
+        if H_.Flags.FreeRoamDistance == nil then H_.Flags.FreeRoamDistance = 12 end
+        if H_.Flags.FreeRoamSensitivity == nil then H_.Flags.FreeRoamSensitivity = 50 end
+        FightSec:Slider({ Name = "Roam Speed", Flag = "FreeRoamSpeed", Min = 4, Max = 120, Default = 22, Callback = function(v) H_.Flags.FreeRoamSpeed = v end })
+        FightSec:Slider({ Name = "Roam Camera Distance", Flag = "FreeRoamDistance", Min = 4, Max = 40, Default = 12, Callback = function(v) H_.Flags.FreeRoamDistance = v end })
+        FightSec:Slider({ Name = "Roam Sensitivity", Flag = "FreeRoamSensitivity", Min = 10, Max = 200, Default = 50, Callback = function(v) H_.Flags.FreeRoamSensitivity = v end })
+
+        local MethodsSection = RageTab:Section({ Name = "Method Selector", Side = "Right" })
         MethodsSection:Dropdown({
             Name = "Active Method",
             Flag = "RageMethodDropdown",
@@ -4717,7 +4684,7 @@ do
         TracerSection:Slider({ Name = "Thickness", Flag = "BulletTracerThickness", Min = 1, Max = 20, Default = 3, Callback = function(v) H_.Flags.BulletTracerThickness = v end })
         TracerSection:Slider({ Name = "Lifetime (x0.1s)", Flag = "BulletTracerLifetime", Min = 1, Max = 50, Default = 8, Callback = function(v) H_.Flags.BulletTracerLifetime = v end })
 
-        TracerSection:Dropdown({ Name = "Tracer Style", Flag = "BulletTracerStyle", Values = {"Solid", "Laser", "Fading", "Lightning", "Pulse", "Dotted", "Rainbow", "Spiral"}, Default = "Solid", Callback = function(v)
+        TracerSection:Dropdown({ Name = "Tracer Style", Flag = "BulletTracerStyle", Values = {"Solid", "Laser", "Fading", "Lightning", "Pulse", "Dotted", "Rainbow", "Spiral", "Ghost", "Beam", "Trail", "ZigZag", "Gradient"}, Default = "Solid", Callback = function(v)
             if type(v) == "table" then v = v[1] end
             H_.Flags.BulletTracerStyle = v
         end })
@@ -4905,6 +4872,82 @@ do
                 seg(point(i - 1), point(i), w, color, life)
             end
         end
+        function TracerStyles.Ghost(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            local dir = (to - from).Unit
+            local steps = math.clamp(math.floor(dist / 3), 5, 25)
+            for i = 1, steps do
+                local t = i / steps
+                local pos = from:Lerp(to, t)
+                seg(pos, pos + dir * w * 0.5, w * (1 - t * 0.3), color, life * (0.2 + 0.8 * (1 - t)), 0.4 + 0.6 * t)
+            end
+        end
+        function TracerStyles.Beam(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            local part = Instance.new("Part")
+            part.Anchored = true
+            part.CanCollide = false
+            part.CanQuery = false
+            part.Material = Enum.Material.Neon
+            part.Color = color
+            part.Size = Vector3.new(w * 3, w * 3, dist)
+            part.CFrame = CFrame.lookAt(from, to) * CFrame.new(0, 0, -dist / 2)
+            part.Parent = workspace
+            local glow = Instance.new("PointLight", part)
+            glow.Color = color
+            glow.Range = 15
+            glow.Brightness = 3
+            TweenService:Create(part, TweenInfo.new(life), { Transparency = 1 }):Play()
+            Debris:AddItem(part, life)
+        end
+        function TracerStyles.Trail(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            local steps = math.clamp(math.floor(dist / 2), 8, 40)
+            local dir = (to - from).Unit
+            for i = 1, steps do
+                local pos = from + dir * (i * (dist / steps))
+                local part = Instance.new("Part")
+                part.Shape = Enum.PartType.Ball
+                part.Size = Vector3.new(w, w, w)
+                part.Anchored = true
+                part.CanCollide = false
+                part.Material = Enum.Material.Neon
+                part.Color = color
+                part.Position = pos + Vector3.new(math.random(-1,1), math.random(-1,1), math.random(-1,1)) * 0.3
+                part.Parent = workspace
+                TweenService:Create(part, TweenInfo.new(life * 0.6), {
+                    Transparency = 1,
+                    Size = Vector3.new(0.1, 0.1, 0.1),
+                    Position = pos + Vector3.new(0, 3, 0),
+                }):Play()
+                Debris:AddItem(part, life)
+            end
+        end
+        function TracerStyles.ZigZag(from, to, w, color, life)
+            local dist = (to - from).Magnitude
+            local dir = (to - from).Unit
+            local right = dir:Cross(Vector3.yAxis)
+            if right.Magnitude < 0.01 then right = dir:Cross(Vector3.xAxis) end
+            right = right.Unit
+            local steps = math.clamp(math.floor(dist / 4), 6, 30)
+            local pts = { from }
+            for i = 1, steps - 1 do
+                pts[#pts + 1] = from:Lerp(to, i / steps) + right * (math.sin(i * 2) * w * 2)
+            end
+            pts[#pts + 1] = to
+            for i = 1, #pts - 1 do
+                seg(pts[i], pts[i + 1], w, color, life * (0.7 + 0.3 * math.random()))
+            end
+        end
+        function TracerStyles.Gradient(from, to, w, color, life)
+            local steps = math.clamp(math.floor((to - from).Magnitude / 5), 4, 20)
+            local white = Color3.new(1, 1, 1)
+            for i = 1, steps do
+                local a = from:Lerp(to, (i - 1) / steps)
+                local b = from:Lerp(to, i / steps)
+                seg(a, b, w * 1.5, color:Lerp(white, math.sin((i / steps) * math.pi)), life)
+            end
+        end
 
         spawnTracer = function(from, to)
             if (to - from).Magnitude < 1 then return end
@@ -4926,32 +4969,48 @@ do
         if hookmetamethod and newcclosure and getnamecallmethod then
             local oldNamecall
             oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-                if H_.Flags.BulletTracers and not H_.Flags.Optimize and getnamecallmethod() == "FireServer" and not checkcaller()
+                if getnamecallmethod() == "FireServer" and not checkcaller()
                     and typeof(self) == "Instance" and self.Name == "MainRemoteEvent" then
-                    local kind, handle, origin, pellets, aim = ...
+                    local args = { ... }
+                    pcall(function()
+                    local kind, handle, origin, pellets, aim = table.unpack(args)
                     if kind == "ShootGun" then
-                        lastShot = os.clock()
-                        local from = (typeof(origin) == "Vector3" and origin)
-                            or (typeof(handle) == "Instance" and handle:IsA("BasePart") and handle.Position)
-                            or shotOrigin()
-                        local targets = {}
-                        if type(pellets) == "table" then
-                            for i, pellet in ipairs(pellets) do
-                                if i > 10 then break end
-                                if type(pellet) == "table" and typeof(pellet.AimPosition) == "Vector3" then
-                                    table.insert(targets, pellet.AimPosition)
+                        local tracerOn = H_.Flags.BulletTracers and not H_.Flags.Optimize
+                        local hitOn = H_.Flags.HitSoundEnabled or H_.Flags.HitHighlightEnabled or H_.Flags.Hitmarker or H_.Flags.DamageNumbers
+                        if tracerOn or hitOn then
+                            lastShot = os.clock()
+                            local from = (typeof(origin) == "Vector3" and origin)
+                                or (typeof(handle) == "Instance" and handle:IsA("BasePart") and handle.Position)
+                                or shotOrigin()
+                            local targets, hitParts = {}, {}
+                            if type(pellets) == "table" then
+                                for i, pellet in ipairs(pellets) do
+                                    if i > 10 then break end
+                                    if type(pellet) == "table" then
+                                        if typeof(pellet.AimPosition) == "Vector3" then
+                                            table.insert(targets, pellet.AimPosition)
+                                        end
+                                        if typeof(pellet.Result2) == "Instance" then
+                                            table.insert(hitParts, pellet.Result2)
+                                        end
+                                    end
                                 end
+                            elseif typeof(aim) == "Vector3" then
+                                table.insert(targets, aim)
                             end
-                        elseif typeof(aim) == "Vector3" then
-                            table.insert(targets, aim)
-                        end
-                        if from then
-                            task.delay(0.3, function()
-                                if lastReplicated >= lastShot then return end
-                                for _, t in ipairs(targets) do spawnTracer(from, t) end
-                            end)
+                            if from and tracerOn then
+                                task.delay(0.3, function()
+                                    if lastReplicated >= lastShot then return end
+                                    for _, t in ipairs(targets) do spawnTracer(from, t) end
+                                end)
+                            end
+                            if hitOn then
+                                local _hp, _tg = hitParts, targets
+                                task.defer(function() pcall(H_.ProcessShotHit, _hp, _tg) end)
+                            end
                         end
                     end
+                    end)
                 end
                 return oldNamecall(self, ...)
             end))
@@ -5073,27 +5132,55 @@ do
         })
         PlayersSection:Dropdown({ Name = "Box Type", Flag = "ESPBoxType", Values = {"None", "2D", "3D"}, Default = "None", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.ESPBoxType = v end })
         PlayersSection:Toggle({ Name = "Glowing Boxes", Flag = "ESPGlowingBoxes", Default = false, Callback = function(v) H_.Flags.ESPGlowingBoxes = v end })
-        PlayersSection:ColorPicker({ Name = "Box Color", Flag = "ESPBoxColor", Default = Color3.fromRGB(255, 255, 255) })
         PlayersSection:Toggle({ Name = "Name ESP", Flag = "ESPName", Default = false, Callback = function(v) H_.Flags.ESPName = v end })
-        PlayersSection:ColorPicker({ Name = "Name Color", Flag = "ESPNameColor", Default = Color3.fromRGB(255, 255, 255) })
-        PlayersSection:Dropdown({ Name = "Name Type", Flag = "ESPNameType", Values = {"Username", "Display"}, Default = "Username", Callback = function(v) H_.Flags.ESPNameType = v end })
+        PlayersSection:Dropdown({ Name = "Name Type", Flag = "ESPNameType", Values = {"Username", "Display"}, Default = "Username", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.ESPNameType = v end })
         PlayersSection:Toggle({ Name = "Health Bar", Flag = "ESPHealth", Default = false, Callback = function(v) H_.Flags.ESPHealth = v end })
-        PlayersSection:ColorPicker({ Name = "Health Color", Flag = "ESPHealthColor", Default = Color3.fromRGB(0, 255, 0) })
         PlayersSection:Toggle({ Name = "Distance", Flag = "ESPDistance", Default = false, Callback = function(v) H_.Flags.ESPDistance = v end })
-        PlayersSection:ColorPicker({ Name = "Distance Color", Flag = "ESPDistanceColor", Default = Color3.fromRGB(255, 255, 255) })
         PlayersSection:Toggle({ Name = "Tool Equip", Flag = "ESPTool", Default = false, Callback = function(v) H_.Flags.ESPTool = v end })
-        PlayersSection:ColorPicker({ Name = "Tool Color", Flag = "ESPToolColor", Default = Color3.fromRGB(0, 255, 0) })
         PlayersSection:Toggle({ Name = "Glow", Flag = "ESPGlow", Default = false, Callback = function(v) H_.Flags.ESPGlow = v end })
-        PlayersSection:ColorPicker({ Name = "Glow Color", Flag = "ESPGlowColor", Default = Color3.fromRGB(255, 255, 255) })
+        PlayersSection:Toggle({ Name = "Skeleton ESP", Flag = "SkeletonESP", Default = false, Callback = function(v) H_.Flags.SkeletonESP = v end })
+        PlayersSection:Slider({ Name = "Bone Thickness", Flag = "SkeletonThickness", Min = 1, Max = 6, Default = 2, Callback = function(v) H_.Flags.SkeletonThickness = v end })
         PlayersSection:Slider({ Name = "Max Distance", Flag = "ESPMaxDistance", Min = 10, Max = 5000, Default = 500, Callback = function(v) H_.Flags.ESPMaxDistance = v end })
         PlayersSection:Toggle({ Name = "No Limit", Flag = "ESPNoLimit", Default = false, Callback = function(v) H_.Flags.ESPNoLimit = v end })
         PlayersSection:Toggle({ Name = "Team Check", Flag = "ESPTeamCheck", Default = true, Callback = function(v) H_.Flags.ESPTeamCheck = v end })
         PlayersSection:Button({ Name = "Reset ESP", Callback = function() task.defer(H_.ResetESP) end })
 
+        local ESPColorsSection = VisualTab:Section({ Name = "ESP Colors", Side = "Left" })
+        ESPColorsSection:ColorPicker({ Name = "Box Color", Flag = "ESPBoxColor", Default = Color3.fromRGB(255, 255, 255) })
+        ESPColorsSection:ColorPicker({ Name = "Name Color", Flag = "ESPNameColor", Default = Color3.fromRGB(255, 255, 255) })
+        ESPColorsSection:ColorPicker({ Name = "Health Color", Flag = "ESPHealthColor", Default = Color3.fromRGB(0, 255, 0) })
+        ESPColorsSection:ColorPicker({ Name = "Distance Color", Flag = "ESPDistanceColor", Default = Color3.fromRGB(255, 255, 255) })
+        ESPColorsSection:ColorPicker({ Name = "Tool Color", Flag = "ESPToolColor", Default = Color3.fromRGB(0, 255, 0) })
+        ESPColorsSection:ColorPicker({ Name = "Glow Color", Flag = "ESPGlowColor", Default = Color3.fromRGB(255, 255, 255) })
+        ESPColorsSection:ColorPicker({ Name = "Skeleton Color", Flag = "SkeletonColor", Default = Color3.fromRGB(120, 255, 120) })
+
         local TracerSection = VisualTab:Section({ Name = "Tracers", Side = "Right" })
         TracerSection:Dropdown({ Name = "Type", Flag = "ESPTracerType", Values = {"Off", "Straight", "Arc"}, Default = "Off", Callback = function(v) H_.Flags.ESPTracerType = v end })
         TracerSection:Dropdown({ Name = "Origin", Flag = "ESPTracerOrigin", Values = {"Cursor", "Bottom", "Center"}, Default = "Bottom", Callback = function(v) H_.Flags.ESPTracerOrigin = v end })
         TracerSection:ColorPicker({ Name = "Color", Flag = "ESPTracerColor", Default = Color3.fromRGB(180, 190, 235) })
+
+        
+
+        local OffscreenSection = VisualTab:Section({ Name = "Offscreen Indicators", Side = "Left" })
+        OffscreenSection:Toggle({ Name = "Offscreen Indicators", Flag = "OffscreenIndicators", Default = false, Callback = function(v) H_.Flags.OffscreenIndicators = v end })
+        OffscreenSection:ColorPicker({ Name = "Indicator Color", Flag = "OffscreenColor", Default = Color3.fromRGB(255, 80, 80) })
+        OffscreenSection:Slider({ Name = "Max Distance", Flag = "OffscreenMaxDistance", Min = 50, Max = 5000, Default = 500, Callback = function(v) H_.Flags.OffscreenMaxDistance = v end })
+
+        local HitFeedback = VisualTab:Section({ Name = "Hit Feedback", Side = "Right" })
+        HitFeedback:Toggle({ Name = "Hit Highlight", Flag = "HitHighlightEnabled", Default = true, Callback = function(v) H_.Flags.HitHighlightEnabled = v end })
+        HitFeedback:Toggle({ Name = "Hit Sounds", Flag = "HitSoundEnabled", Default = false, Callback = function(v) H_.Flags.HitSoundEnabled = v end })
+        HitFeedback:Dropdown({ Name = "Sound", Flag = "HitSoundType", Values = {"Ping", "TF2", "TF2 Crit", "Osu", "Low Hit"}, Default = "Ping", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.HitSoundType = v end })
+        HitFeedback:Slider({ Name = "Volume", Flag = "HitSoundVolume", Min = 0, Max = 100, Default = 100, Callback = function(v) H_.Flags.HitSoundVolume = v end })
+        HitFeedback:Slider({ Name = "Pitch", Flag = "HitSoundPitch", Min = 50, Max = 200, Default = 100, Callback = function(v) H_.Flags.HitSoundPitch = v end })
+        HitFeedback:Toggle({ Name = "Hitmarker", Flag = "Hitmarker", Default = false, Callback = function(v) H_.Flags.Hitmarker = v end })
+        HitFeedback:ColorPicker({ Name = "Hitmarker Color", Flag = "HitmarkerColor", Default = Color3.fromRGB(255, 255, 255) })
+        HitFeedback:Slider({ Name = "Hitmarker Size", Flag = "HitmarkerSize", Min = 4, Max = 30, Default = 9, Callback = function(v) H_.Flags.HitmarkerSize = v end })
+        HitFeedback:Slider({ Name = "Hitmarker Thickness", Flag = "HitmarkerThickness", Min = 1, Max = 5, Default = 2, Callback = function(v) H_.Flags.HitmarkerThickness = v end })
+        HitFeedback:Toggle({ Name = "Damage Numbers", Flag = "DamageNumbers", Default = false, Callback = function(v) H_.Flags.DamageNumbers = v end })
+        HitFeedback:Dropdown({ Name = "Damage Style", Flag = "DamageNumberStyle", Values = {"Static", "Cumulative"}, Default = "Static", Callback = function(v) if type(v) == "table" then v = v[1] end H_.Flags.DamageNumberStyle = v end })
+        HitFeedback:ColorPicker({ Name = "Damage Color", Flag = "DamageNumberColor", Default = Color3.fromRGB(255, 255, 255) })
+        HitFeedback:Slider({ Name = "Damage Size", Flag = "DamageNumberSize", Min = 10, Max = 36, Default = 18, Callback = function(v) H_.Flags.DamageNumberSize = v end })
+        HitFeedback:Slider({ Name = "Damage Lifetime (x0.01s)", Flag = "DamageNumberLifetime", Min = 20, Max = 300, Default = 80, Callback = function(v) H_.Flags.DamageNumberLifetime = v end })
 
         local CrossSection = VisualTab:Section({ Name = "Crosshair", Side = "Left" })
         CrossSection:Toggle({ Name = "Custom Crosshair", Flag = "CrosshairEnabled", Default = false, Callback = function(v) H_.Flags.CrosshairEnabled = v end })
@@ -5429,6 +5516,14 @@ do
         })
         FlySection:Slider({ Name = "Fly Speed", Flag = "FlySpeed", Min = 1, Max = 50, Default = 5, Callback = function(v) H_.Flags.FlySpeed = v end })
 
+        local FreecamSection = MoveTab:Section("Freecam")
+        FreecamSection:Toggle({ Name = "Freecam", Flag = "Freecam", Default = false, Keybind = "F", Callback = function(v)
+            H_.Flags.Freecam = v
+            if v then H_.StartFreecam() else H_.StopFreecam() end
+        end })
+        FreecamSection:Slider({ Name = "Speed", Flag = "FreecamSpeed", Min = 10, Max = 400, Default = 60, Callback = function(v) H_.Flags.FreecamSpeed = v end })
+        FreecamSection:Slider({ Name = "Sensitivity", Flag = "FreecamSensitivity", Min = 10, Max = 200, Default = 50, Callback = function(v) H_.Flags.FreecamSensitivity = v end })
+
         local VoidLoopSection = MoveTab:Section("Void Loop")
         VoidLoopSection:Toggle({
             Name = "Void Loop",
@@ -5472,6 +5567,141 @@ do
         MiscMoveSection:Toggle({ Name = "Spider", Flag = "Spider", Default = false, Callback = function(v) H_.Flags.Spider = v end })
     end
 
+do
+        local AnimTab = Group:Tab({ Name = "Animations", Icon = "play" })
+
+        local packNames = {
+            "Default", "Astronaut", "Bubbly", "Cartoony", "Confident", "Cowboy",
+            "Elder", "Knight", "Levitation", "Mage", "Mocap", "Ninja", "Oldschool",
+            "Patrol", "Pirate", "Popstar", "Princess", "Robot", "Rthro", "Sneaky",
+            "Stylish", "Superhero", "Toy", "Vampire", "Werewolf", "Zombie",
+        }
+
+        local slotList = {
+            { key = "idle",     label = "Idle 1"    },
+            { key = "idle2",    label = "Idle 2"    },
+            { key = "walk",     label = "Walk"      },
+            { key = "run",      label = "Run"       },
+            { key = "jump",     label = "Jump"      },
+            { key = "fall",     label = "Fall"      },
+            { key = "climb",    label = "Climb"     },
+            { key = "swim",     label = "Swim"      },
+            { key = "swimidle", label = "Swim Idle" },
+            { key = "sit",      label = "Sit"       },
+        }
+
+        local sources = { "Original" }
+        for _, n in ipairs(packNames) do table.insert(sources, n) end
+
+        local PackSection = AnimTab:Section("Animations")
+        PackSection:Button({
+            Name = "Apply",
+            Callback = function()
+                task.spawn(function()
+                    local ok = H_.AnimApply()
+                    Arvn_:Notify({
+                        Title = "Animations",
+                        Content = ok and "Animations applied" or "No character yet",
+                        Kind = ok and "Success" or "Warning",
+                    })
+                end)
+            end,
+        })
+        PackSection:Button({
+            Name = "Restore Originals",
+            Callback = function()
+                H_.AnimRestore()
+                Arvn_:Notify({ Title = "Animations", Content = "Originals restored", Kind = "Info" })
+            end,
+        })
+        PackSection:Button({
+            Name = "Reset Slots",
+            Callback = function()
+                for _, s in ipairs(slotList) do
+                    H_.Flags["AnimSrc_" .. s.key] = "Original"
+                end
+                H_.AnimApplySoon()
+                Arvn_:Notify({ Title = "Animations", Content = "All slots back to original", Kind = "Info" })
+            end,
+        })
+        
+        PackSection:Paragraph({ Title = "Note", Content = "Every dropdown sets one animation on its own. Original leaves that slot untouched; picking a pack name swaps only that animation. Also applies to the puppet while Free Roam is on." })
+
+        local PerA = AnimTab:Section({ Name = "Per Animation - Legs", Side = "Left" })
+        local PerB = AnimTab:Section({ Name = "Per Animation - Body", Side = "Right" })
+        for i, s in ipairs(slotList) do
+            local sec = (i <= 5) and PerA or PerB
+            sec:Dropdown({
+                Name = s.label,
+                Flag = "AnimSrc_" .. s.key,
+                Values = sources,
+                Default = "Original",
+                Callback = function(v)
+                    if type(v) == "table" then v = v[1] end
+                    H_.Flags["AnimSrc_" .. s.key] = v
+                    H_.AnimApplySoon()
+                end,
+            })
+        end
+
+        local EmoteSection = AnimTab:Section("Emote / Dance")
+        H_.AnimEmotes = {
+            ["Dance"]   = 507771019,
+            ["Dance 2"] = 507771955,
+            ["Dance 3"] = 507772104,
+            ["Wave"]    = 507770239,
+            ["Point"]   = 507770453,
+            ["Laugh"]   = 507770818,
+            ["Cheer"]   = 507770677,
+        }
+        local emoteNames = {}
+        for n in pairs(H_.AnimEmotes) do table.insert(emoteNames, n) end
+        table.sort(emoteNames)
+        if H_.Flags.AnimEmote == nil then H_.Flags.AnimEmote = "Dance" end
+
+        EmoteSection:Dropdown({
+            Name = "Emote",
+            Flag = "AnimEmote",
+            Values = emoteNames,
+            Default = "Dance",
+            Callback = function(v)
+                if type(v) == "table" then v = v[1] end
+                H_.Flags.AnimEmote = v
+                if H_.Flags.AnimEmoteOn then
+                    local id = H_.AnimEmotes[v]
+                    if id then pcall(H_.AnimEmotePlay, "rbxassetid://" .. id) end
+                end
+            end,
+        })
+        EmoteSection:Toggle({
+            Name = "Play Emote",
+            Flag = "AnimEmoteOn",
+            Default = false,
+            Callback = function(v)
+                H_.Flags.AnimEmoteOn = v
+                if v then
+                    local id = H_.AnimEmotes[H_.Flags.AnimEmote or "Dance"]
+                    if id then pcall(H_.AnimEmotePlay, "rbxassetid://" .. id) end
+                else
+                    H_.AnimEmoteStop()
+                end
+            end,
+        })
+        EmoteSection:Input({ Name = "Custom Emote ID", Flag = "AnimEmoteCustom", Placeholder = "rbxassetid:// or number", Default = "", Callback = function(v) H_.Flags.AnimEmoteCustom = v end })
+        EmoteSection:Button({ Name = "Play Custom", Callback = function()
+            local custom = H_.Flags.AnimEmoteCustom
+            if type(custom) == "string" and custom ~= "" then
+                pcall(H_.AnimEmotePlay, custom)
+            end
+        end })
+        EmoteSection:Button({ Name = "Stop Emote", Callback = function()
+            H_.AnimEmoteStop()
+            H_.Flags.AnimEmoteOn = false
+            Arvn_:Notify({ Title = "Animations", Content = "Emote stopped", Kind = "Info" })
+        end })
+        EmoteSection:Paragraph({ Title = "Note", Content = "Emotes play on you and the puppet, and override the pack while on." })
+    end
+
     do
         local WorldTab = Group:Tab({ Name = "World", Icon = "globe" })
         local WorldSection = WorldTab:Section("World Settings")
@@ -5483,6 +5713,23 @@ do
         WorldSection:ColorPicker({ Name = "Ambient Color", Flag = "AmbientColor", Default = Color3.new(0.5, 0.5, 0.5), Callback = function(v)
             H_.ApplyAmbient()
         end })
+        WorldSection:Slider({ Name = "Brightness", Flag = "Brightness", Min = 0, Max = 10, Default = 2, Callback = function(v)
+            H_.Flags.Brightness = v
+            H_.Lighting.Brightness = v
+        end })
+        WorldSection:Toggle({ Name = "Atmosphere Enabled", Flag = "AtmosphereEnabled", Default = false, Callback = function(v)
+            H_.Flags.AtmosphereEnabled = v
+            H_.ApplyAtmosphere()
+        end })
+        WorldSection:Slider({ Name = "Atmo Density %", Flag = "AtmosphereDensity", Min = 0, Max = 100, Default = 35, Callback = function(v) H_.Flags.AtmosphereDensity = v H_.ApplyAtmosphere() end })
+        WorldSection:Slider({ Name = "Atmo Haze %", Flag = "AtmosphereHaze", Min = 0, Max = 100, Default = 0, Callback = function(v) H_.Flags.AtmosphereHaze = v H_.ApplyAtmosphere() end })
+        WorldSection:Slider({ Name = "Atmo Glare %", Flag = "AtmosphereGlare", Min = 0, Max = 100, Default = 0, Callback = function(v) H_.Flags.AtmosphereGlare = v H_.ApplyAtmosphere() end })
+        WorldSection:ColorPicker({ Name = "Atmo Color", Flag = "AtmosphereColor", Default = Color3.fromRGB(199, 199, 199), Callback = function() H_.ApplyAtmosphere() end })
+
+        local RemovalSection = WorldTab:Section({ Name = "Removal", Side = "Right" })
+        RemovalSection:Toggle({ Name = "Remove Post FX", Flag = "RemovePostFX", Default = false, Callback = function(v) H_.Flags.RemovePostFX = v H_.ApplyRemovePostFX(v) end })
+        RemovalSection:Toggle({ Name = "Remove Shadows", Flag = "RemoveShadows", Default = false, Callback = function(v) H_.Flags.RemoveShadows = v H_.ApplyRemoveShadows(v) end })
+        RemovalSection:Toggle({ Name = "Remove Grass", Flag = "RemoveGrass", Default = false, Callback = function(v) H_.Flags.RemoveGrass = v H_.ApplyRemoveGrass(v) end })
 
         local Skyboxes = {
             ["Dark Sky"] = { Up = 570555929, Rt = 570555882, Dn = 570555964, Ft = 570555800, Lf = 570555840, Bk = 570555736 },
@@ -6035,7 +6282,7 @@ do
                     end
                 end
                 pcall(function()
-                    hum.AutoRotate = false
+                    hum.AutoRotate = true
                     hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
                 end)
             end)
@@ -6172,6 +6419,25 @@ do
                     if H_.FOVCircle then pcall(function() H_.FOVCircle:Remove() end) H_.FOVCircle = nil end
                     if H_.SilentFOVCircle then pcall(function() H_.SilentFOVCircle:Remove() end) H_.SilentFOVCircle = nil end
                     if H_.Watermark then pcall(function() H_.Watermark:Remove() end) H_.Watermark = nil end
+                    if H_.Hitmarker then for _, l in ipairs(H_.Hitmarker.lines) do pcall(function() l:Remove() end) end H_.Hitmarker = nil end
+                    for _, e in ipairs(H_.DamageNumbers) do if e.text then pcall(function() e.text:Remove() end) end end
+                    H_.DamageNumbers = {}
+                    H_.DamageNumberActive = {}
+                    for _, o in pairs(H_.OffscreenObjects) do for _, l in ipairs(o.lines) do pcall(function() l:Remove() end) end if o.text then pcall(function() o.text:Remove() end) end end
+                    H_.OffscreenObjects = {}
+                    for _, o in pairs(H_.SkeletonObjects) do for _, l in ipairs(o.lines) do pcall(function() l:Remove() end) end end
+                    H_.SkeletonObjects = {}
+                    pcall(H_.StopFreecam)
+                    pcall(function() H_.RunService:UnbindFromRenderStep("houhouFreecam") end)
+                    pcall(H_.StopFreeRoam, true)
+                    pcall(H_.DestroyPuppet)
+                    pcall(H_.AnimStop)
+                    pcall(function() H_.RunService:UnbindFromRenderStep("houhouFreeRoam") end)
+                    
+                    if H_.Flags.RemovePostFX then pcall(H_.ApplyRemovePostFX, false) end
+                    if H_.Flags.RemoveShadows then pcall(H_.ApplyRemoveShadows, false) end
+                    if H_.Flags.RemoveGrass then pcall(H_.ApplyRemoveGrass, false) end
+                    if H_.Flags.AtmosphereEnabled then H_.Flags.AtmosphereEnabled = false pcall(H_.ApplyAtmosphere) end
                     for plr in pairs(H_.ESPObjects) do H_.RemoveESP(plr) end
                     H_.Lighting.Brightness = H_.oldLighting.Brightness
                     H_.Lighting.ClockTime = H_.oldLighting.ClockTime
@@ -6206,6 +6472,1472 @@ do
 end
 
 do
+    local Players = H.Players
+    local LocalPlayer = H.LocalPlayer
+
+    H.HitHighlights = {}
+
+    H.HitSounds = {
+        ["Ping"]      = "rbxassetid://4590662766",
+        ["TF2"]       = "rbxassetid://2868331684",
+        ["TF2 Crit"]  = "rbxassetid://8255306220",
+        ["Osu"]       = "rbxassetid://7147209692",
+        ["Low Hit"]   = "rbxassetid://4985434782",
+    }
+
+    function H.PlayHitSound()
+        if not H.Flags.HitSoundEnabled then return end
+        local soundId = H.HitSounds[H.Flags.HitSoundType or "Ping"] or H.HitSounds["Ping"]
+        local sound = Instance.new("Sound")
+        sound.SoundId = soundId
+        sound.Volume = (H.Flags.HitSoundVolume or 100) / 100
+        sound.PlaybackSpeed = (H.Flags.HitSoundPitch or 100) / 100
+        sound.Parent = workspace
+        sound:Play()
+        game:GetService("Debris"):AddItem(sound, 2)
+    end
+
+    function H.CreateHitHighlight(plr)
+        if not plr or not plr.Character then return end
+        local char = plr.Character
+        if H.HitHighlights[plr] then
+            pcall(function() H.HitHighlights[plr]:Destroy() end)
+        end
+        local hl = Instance.new("Highlight")
+        hl.Name = "houhouHit"
+        hl.FillColor = Color3.fromRGB(255, 0, 0)
+        hl.OutlineColor = Color3.fromRGB(255, 120, 120)
+        hl.FillTransparency = 0.15
+        hl.OutlineTransparency = 0
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Adornee = char
+        hl.Parent = char
+        H.HitHighlights[plr] = hl
+        task.spawn(function()
+            for i = 1, 15 do
+                task.wait(0.03)
+                if not hl.Parent then break end
+                local p = i / 15
+                hl.FillTransparency = 0.15 + p * 0.85
+                hl.OutlineTransparency = p
+            end
+            if hl.Parent then hl:Destroy() end
+            if H.HitHighlights[plr] == hl then H.HitHighlights[plr] = nil end
+        end)
+    end
+
+    function H.ProcessShotHit(hitParts, targets)
+        if not (H.Flags.HitSoundEnabled or H.Flags.HitHighlightEnabled or H.Flags.Hitmarker or H.Flags.DamageNumbers) then return end
+        local plr = nil
+        for _, part in ipairs(hitParts) do
+            if typeof(part) == "Instance" and part.Parent then
+                local model = part:FindFirstAncestorOfClass("Model")
+                local p = model and Players:GetPlayerFromCharacter(model)
+                if p and p ~= LocalPlayer then plr = p break end
+            end
+        end
+        if not plr then
+            for _, t in ipairs(targets) do
+                local best, bestD = nil, 8
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and p.Character then
+                        local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            local d = (hrp.Position - t).Magnitude
+                            if d < bestD then bestD = d best = p end
+                        end
+                    end
+                end
+                if best then plr = best break end
+            end
+        end
+        if plr then
+            if H.Flags.HitHighlightEnabled then H.CreateHitHighlight(plr) end
+            if H.Flags.HitSoundEnabled then H.PlayHitSound() end
+            if H.Flags.Hitmarker then H.ShowHitmarker() end
+            if H.Flags.DamageNumbers then H.AddDamageNumber(plr, H.DamageAmount()) end
+        end
+    end
+
+    function H.InitSilentAimVisual()
+        if not H.HAS_DRAWING then return end
+        if H.SilentAimLine then pcall(function() H.SilentAimLine:Remove() end) end
+        H.SilentAimLine = Drawing.new("Line")
+        H.SilentAimLine.Thickness = 2
+        H.SilentAimLine.Color = Color3.fromRGB(255, 50, 50)
+        H.SilentAimLine.Visible = false
+    end
+
+    function H.UpdateSilentAimVisual()
+        if not H.HAS_DRAWING then return end
+        if not (H.Flags.SilentAimVisualize ~= false and H.Flags.SilentAimEnabled
+            and H.SilentCachedPart and H.SilentCachedPart.Parent) then
+            if H.SilentAimLine then H.SilentAimLine.Visible = false end
+            return
+        end
+        if not H.SilentAimLine then H.InitSilentAimVisual() end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local f2
+        if (H.Flags.SilentAimSelect or "Center") == "Mouse" then
+            f2 = H.GetMousePos()
+        else
+            f2 = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+        end
+        local t2, tv = H.WorldToScreen(H.SilentCachedPart.Position)
+        if tv then
+            H.SilentAimLine.From = f2
+            H.SilentAimLine.To = t2
+            H.SilentAimLine.Color = H.NormalizeColor(H.Flags.SilentAimVisualizeColor, Color3.fromRGB(255, 50, 50))
+            H.SilentAimLine.Thickness = H.Flags.SilentAimVisualizeThickness or 2
+            H.SilentAimLine.Visible = true
+        else
+            H.SilentAimLine.Visible = false
+        end
+    end
+
+    H.Hitmarker = nil
+    function H.InitHitmarker()
+        if not H.HAS_DRAWING then return end
+        if H.Hitmarker then
+            for _, l in ipairs(H.Hitmarker.lines) do pcall(function() l:Remove() end) end
+        end
+        local lines = {}
+        for i = 1, 4 do
+            local l = Drawing.new("Line")
+            l.Thickness = 2
+            l.Transparency = 1
+            l.Visible = false
+            lines[i] = l
+        end
+        H.Hitmarker = { lines = lines, until_ = 0 }
+    end
+
+    function H.ShowHitmarker()
+        if not H.HAS_DRAWING then return end
+        if not H.Hitmarker then H.InitHitmarker() end
+        H.Hitmarker.until_ = tick() + 0.12
+    end
+
+    function H.UpdateHitmarker()
+        if not H.HAS_DRAWING or not H.Hitmarker then return end
+        local hm = H.Hitmarker
+        local now = tick()
+        if now > hm.until_ then
+            if hm.lines[1].Visible then
+                for _, l in ipairs(hm.lines) do l.Visible = false end
+            end
+            return
+        end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local center
+        if (H.Flags.SilentAimSelect or "Center") == "Mouse" then
+            center = H.GetMousePos()
+        else
+            center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+        end
+        local size = H.Flags.HitmarkerSize or 9
+        local gap = size * 0.35
+        local col = H.NormalizeColor(H.Flags.HitmarkerColor, Color3.new(1, 1, 1))
+        local alpha = math.clamp((hm.until_ - now) / 0.12, 0, 1)
+        local dirs = { Vector2.new(-1, -1), Vector2.new(1, -1), Vector2.new(-1, 1), Vector2.new(1, 1) }
+        for i = 1, 4 do
+            local d = dirs[i]
+            local l = hm.lines[i]
+            l.From = center + d * gap
+            l.To = center + d * (gap + size)
+            l.Color = col
+            l.Transparency = alpha
+            l.Thickness = H.Flags.HitmarkerThickness or 2
+            l.Visible = true
+        end
+    end
+
+    H.DamageNumbers = {}
+    H.DamageNumberActive = {}
+
+    function H.DamageAmount()
+        local tool = H.GetEquippedWeapon()
+        if tool then
+            local d = tool:FindFirstChild("Damage") or tool:FindFirstChild("damage")
+            if d and d:IsA("ValueBase") and type(d.Value) == "number" then return d.Value end
+            local a = tool:GetAttribute("Damage")
+            if type(a) == "number" then return a end
+        end
+        return 1
+    end
+
+    function H.AddDamageNumber(plr, amount)
+        if not (H.Flags.DamageNumbers and H.HAS_DRAWING) then return end
+        if not plr or not plr.Character then return end
+        local style = H.Flags.DamageNumberStyle or "Static"
+        local life = (H.Flags.DamageNumberLifetime or 80) / 100
+        if style == "Cumulative" then
+            local e = H.DamageNumberActive[plr]
+            if e then
+                e.amount = e.amount + amount
+                e.dead = tick() + life
+                return
+            end
+        end
+        if #H.DamageNumbers > 60 then
+            local old = table.remove(H.DamageNumbers, 1)
+            if old and old.text then pcall(function() old.text:Remove() end) end
+            if old and H.DamageNumberActive[old.plr] == old then H.DamageNumberActive[old.plr] = nil end
+        end
+        local txt = Drawing.new("Text")
+        txt.Size = H.Flags.DamageNumberSize or 18
+        txt.Center = true
+        txt.Outline = true
+        txt.Transparency = 1
+        txt.Color = H.NormalizeColor(H.Flags.DamageNumberColor, Color3.new(1, 1, 1))
+        txt.Visible = false
+        local e = { plr = plr, amount = amount, born = tick(), dead = tick() + life, text = txt }
+        table.insert(H.DamageNumbers, e)
+        if style == "Cumulative" then H.DamageNumberActive[plr] = e end
+    end
+
+    function H.UpdateDamageNumbers()
+        if not H.HAS_DRAWING or #H.DamageNumbers == 0 then return end
+        local now = tick()
+        for i = #H.DamageNumbers, 1, -1 do
+            local e = H.DamageNumbers[i]
+            if now > e.dead or not e.plr or not e.plr.Parent then
+                if e.text then pcall(function() e.text:Remove() end) end
+                if H.DamageNumberActive[e.plr] == e then H.DamageNumberActive[e.plr] = nil end
+                table.remove(H.DamageNumbers, i)
+            else
+                local hrp = e.plr.Character and e.plr.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local sp, on = H.WorldToScreen(hrp.Position + Vector3.new(0, 3.2, 0))
+                    if on then
+                        e.text.Position = sp - Vector2.new(0, math.min((now - e.born) * 35, 45))
+                        e.text.Text = tostring(math.floor(e.amount + 0.5))
+                        e.text.Size = H.Flags.DamageNumberSize or 18
+                        e.text.Color = H.NormalizeColor(H.Flags.DamageNumberColor, Color3.new(1, 1, 1))
+                        e.text.Transparency = math.clamp((e.dead - now) / 0.4, 0, 1)
+                        e.text.Visible = true
+                    else
+                        e.text.Visible = false
+                    end
+                end
+            end
+        end
+    end
+
+    H.OffscreenObjects = {}
+    function H.UpdateOffscreen()
+        local cam = workspace.CurrentCamera
+        if not H.HAS_DRAWING or not cam then return end
+        local on = H.Flags.OffscreenIndicators
+        for plr, o in pairs(H.OffscreenObjects) do
+            if not on or not plr.Parent or not plr.Character or not H.IsAlive(plr) then
+                for _, l in ipairs(o.lines) do l.Visible = false end
+                if o.text then o.text.Visible = false end
+            end
+        end
+        if not on then return end
+        local vp = cam.ViewportSize
+        local center = Vector2.new(vp.X / 2, vp.Y / 2)
+        local margin = 34
+        local maxDist = H.Flags.OffscreenMaxDistance or 500
+        local col = H.NormalizeColor(H.Flags.OffscreenColor, Color3.fromRGB(255, 80, 80))
+        for _, plr in ipairs(H.Players:GetPlayers()) do
+            if plr ~= H.LocalPlayer and plr.Character and H.IsAlive(plr) and not H.WLIgnore(plr) then
+                local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local dist = (cam.CFrame.Position - hrp.Position).Magnitude
+                    if dist <= maxDist then
+                        local v3 = cam:WorldToViewportPoint(hrp.Position)
+                        local onScreen = v3.Z > 0 and v3.X >= 0 and v3.X <= vp.X and v3.Y >= 0 and v3.Y <= vp.Y
+                        local o = H.OffscreenObjects[plr]
+                        if not o then
+                            o = { lines = {} }
+                            for i = 1, 3 do
+                                local l = Drawing.new("Line")
+                                l.Thickness = 2
+                                l.Transparency = 1
+                                l.Visible = false
+                                o.lines[i] = l
+                            end
+                            o.text = Drawing.new("Text")
+                            o.text.Size = 14
+                            o.text.Center = true
+                            o.text.Outline = true
+                            o.text.Visible = false
+                            H.OffscreenObjects[plr] = o
+                        end
+                        if onScreen then
+                            for _, l in ipairs(o.lines) do l.Visible = false end
+                            o.text.Visible = false
+                        else
+                            local dir = Vector2.new(v3.X, v3.Y) - center
+                            if v3.Z < 0 then dir = -dir end
+                            if dir.Magnitude < 0.001 then dir = Vector2.new(0, 1) end
+                            local unit = dir.Unit
+                            local scale = math.min((center.X - margin) / math.max(math.abs(unit.X), 0.001),
+                                                   (center.Y - margin) / math.max(math.abs(unit.Y), 0.001))
+                            local pos = center + unit * scale
+                            local ang = math.atan2(unit.Y, unit.X)
+                            local s = 13
+                            local function rot(p)
+                                return Vector2.new(p.X * math.cos(ang) - p.Y * math.sin(ang),
+                                                   p.X * math.sin(ang) + p.Y * math.cos(ang))
+                            end
+                            local a = pos + rot(Vector2.new(s, 0))
+                            local b = pos + rot(Vector2.new(-s * 0.75, s * 0.75))
+                            local c = pos + rot(Vector2.new(-s * 0.75, -s * 0.75))
+                            local tri = { { a, b }, { b, c }, { c, a } }
+                            for i = 1, 3 do
+                                local l = o.lines[i]
+                                l.From = tri[i][1]
+                                l.To = tri[i][2]
+                                l.Color = col
+                                l.Visible = true
+                            end
+                            o.text.Text = string.format("%d", math.floor(dist))
+                            o.text.Color = col
+                            o.text.Position = pos + unit * 20
+                            o.text.Visible = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    H.SkeletonObjects = {}
+    H.SkeletonR15 = {
+        {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
+        {"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
+        {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
+        {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},
+        {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
+    }
+    H.SkeletonR6 = {
+        {"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},
+        {"Torso","Left Leg"},{"Torso","Right Leg"},
+    }
+
+    function H.UpdateSkeleton()
+        local on = H.Flags.SkeletonESP
+        for plr, o in pairs(H.SkeletonObjects) do
+            if not on or not plr.Parent or not plr.Character or not H.IsAlive(plr) then
+                for _, l in ipairs(o.lines) do l.Visible = false end
+            end
+        end
+        if not on or not H.HAS_DRAWING then return end
+        local col = H.NormalizeColor(H.Flags.SkeletonColor, Color3.fromRGB(120, 255, 120))
+        for _, plr in ipairs(H.Players:GetPlayers()) do
+            if plr ~= H.LocalPlayer and plr.Character and H.IsAlive(plr) then
+                if not (H.Flags.SkeletonTeamCheck and H.HasTeam(plr)) then
+                    local char = plr.Character
+                    local bones = char:FindFirstChild("UpperTorso") and H.SkeletonR15
+                        or (char:FindFirstChild("Torso") and H.SkeletonR6 or nil)
+                    if bones then
+                        local o = H.SkeletonObjects[plr]
+                        if not o or #o.lines < #bones then
+                            if o then for _, l in ipairs(o.lines) do pcall(function() l:Remove() end) end end
+                            o = { lines = {} }
+                            for i = 1, #bones do
+                                local l = Drawing.new("Line")
+                                l.Thickness = 1.5
+                                l.Transparency = 1
+                                l.Visible = false
+                                o.lines[i] = l
+                            end
+                            H.SkeletonObjects[plr] = o
+                        end
+                        for i, pair in ipairs(bones) do
+                            local a = char:FindFirstChild(pair[1])
+                            local b = char:FindFirstChild(pair[2])
+                            local l = o.lines[i]
+                            if a and b then
+                                local pa, oa = H.WorldToScreen(a.Position)
+                                local pb, ob = H.WorldToScreen(b.Position)
+                                if oa and ob then
+                                    l.From = pa
+                                    l.To = pb
+                                    l.Color = col
+                                    l.Thickness = H.Flags.SkeletonThickness or 2
+                                    l.Visible = true
+                                else
+                                    l.Visible = false
+                                end
+                            else
+                                l.Visible = false
+                            end
+                        end
+                        for i = #bones + 1, #o.lines do o.lines[i].Visible = false end
+                    end
+                end
+            end
+        end
+    end
+
+    H.FreecamActive = false
+    H.FreecamLook = Vector2.new(0, 0)
+    H.FreecamLastLoc = nil
+    H.FreecamSavedAnchored = nil
+    H.FreecamRMB = false
+    H.FreecamSettle = 0
+
+    function H.FreecamAnchorChar()
+        local hrp = H.GetHRP()
+        if not hrp then return end
+        if H.FreecamSavedAnchored == nil then H.FreecamSavedAnchored = hrp.Anchored end
+        if not hrp.Anchored then hrp.Anchored = true end
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+
+    function H.StartFreecam()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        H.FreecamActive = true
+        H.FreecamCF = cam.CFrame
+        H.FreecamLook = Vector2.new(0, 0)
+        H.FreecamLastLoc = nil
+        H.FreecamSavedAnchored = nil
+        local look = cam.CFrame.LookVector
+        H.FreecamYaw = math.atan2(-look.X, -look.Z)
+        H.FreecamPitch = math.asin(math.clamp(look.Y, -1, 1))
+        pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
+        pcall(function() H.UserInputService.MouseBehavior = Enum.MouseBehavior.Default end)
+        H.FreecamAnchorChar()
+    end
+
+    function H.StopFreecam()
+        H.FreecamActive = false
+        local cam = workspace.CurrentCamera
+        if cam then pcall(function() cam.CameraType = Enum.CameraType.Custom end) end
+        local hum = H.GetHum()
+        if cam and hum then pcall(function() cam.CameraSubject = hum end) end
+        local hrp = H.GetHRP()
+        if hrp then
+            local want = H.Flags.Anchor and true or (H.FreecamSavedAnchored or false)
+            pcall(function() hrp.Anchored = want end)
+        end
+        pcall(function() H.UserInputService.MouseBehavior = Enum.MouseBehavior.Default end)
+        H.FreecamSavedAnchored = nil
+        H.FreecamLastLoc = nil
+    end
+
+    function H.UpdateFreecam(dt)
+        if not H.Flags.Freecam then return end
+        if not H.FreecamActive then H.StartFreecam() end
+        local cam = workspace.CurrentCamera
+        if not cam or not H.FreecamCF then return end
+        dt = math.clamp(dt or (1 / 60), 0, 0.1)
+
+        if cam.CameraType ~= Enum.CameraType.Scriptable then
+            pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
+        end
+        H.FreecamAnchorChar()
+
+        local sens = (H.Flags.FreecamSensitivity or 50) * 0.0001
+        local uis = H.UserInputService
+        local rmb = uis:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+
+        if rmb ~= H.FreecamRMB then
+            H.FreecamRMB = rmb
+            H.FreecamSettle = 2
+            H.FreecamLook = Vector2.new(0, 0)
+        end
+        if rmb then
+            if uis.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+                pcall(function() uis.MouseBehavior = Enum.MouseBehavior.LockCenter end)
+            end
+        elseif uis.MouseBehavior ~= Enum.MouseBehavior.Default then
+            pcall(function() uis.MouseBehavior = Enum.MouseBehavior.Default end)
+        end
+        if H.FreecamSettle > 0 then H.FreecamSettle = H.FreecamSettle - 1 end
+
+        local look = H.FreecamLook
+        H.FreecamLook = Vector2.new(0, 0)
+        if H.FreecamSettle > 0 then
+            look = Vector2.new(0, 0)
+        elseif rmb then
+            local d = uis:GetMouseDelta()
+            if d and d.Magnitude > 0.01 then look = d end
+        end
+
+        if look.Magnitude > 0.01 then
+            H.FreecamYaw = H.FreecamYaw - look.X * sens
+            H.FreecamPitch = math.clamp(H.FreecamPitch - look.Y * sens, -math.pi / 2 + 0.02, math.pi / 2 - 0.02)
+        end
+
+        local k = 1.8 * dt
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Left)  then H.FreecamYaw = H.FreecamYaw + k end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Right) then H.FreecamYaw = H.FreecamYaw - k end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Up)    then H.FreecamPitch = math.clamp(H.FreecamPitch + k, -math.pi / 2 + 0.02, math.pi / 2 - 0.02) end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Down)  then H.FreecamPitch = math.clamp(H.FreecamPitch - k, -math.pi / 2 + 0.02, math.pi / 2 - 0.02) end
+
+        local cf = CFrame.new(H.FreecamCF.Position) * CFrame.Angles(0, H.FreecamYaw, 0) * CFrame.Angles(H.FreecamPitch, 0, 0)
+        local move = Vector3.zero
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + cf.LookVector end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - cf.LookVector end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - cf.RightVector end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + cf.RightVector end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0, 1, 0) end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0, 1, 0) end
+        if move.Magnitude > 0 then cf = cf + move.Unit * (H.Flags.FreecamSpeed or 60) * dt end
+        H.FreecamCF = cf
+        pcall(function() cam.CFrame = cf end)
+    end
+
+    H.UserInputService.InputChanged:Connect(function(input)
+        if not H.FreecamActive then return end
+        if input.UserInputType == Enum.UserInputType.Touch then
+            local d = input.Delta
+            if d then H.FreecamLook = H.FreecamLook + Vector2.new(d.X, d.Y) end
+        end
+    end)
+
+    H.FreeRoamActive = false
+    H.FreeRoamPuppet = nil
+    H.FreeRoamLook = Vector2.new(0, 0)
+    H.FreeRoamRMB = false
+    H.FreeRoamSettle = 0
+    H.FreeRoamYaw = 0
+    H.FreeRoamPitch = -0.15
+    H.FreeRoamLastPos = nil
+
+    function H.DestroyPuppet()
+        if H.FreeRoamPuppet then
+            pcall(function() H.FreeRoamPuppet:Destroy() end)
+            H.FreeRoamPuppet = nil
+        end
+        H.FreeRoamAnim = nil
+    end
+
+    function H.FreeRoamControls(on)
+        pcall(function()
+            local ps = H.LocalPlayer:FindFirstChild("PlayerScripts")
+            local pm = ps and ps:FindFirstChild("PlayerModule")
+            if not pm then return end
+            local controls = require(pm):GetControls()
+            if on then
+                controls:Enable()
+            else
+                controls:Disable()
+            end
+        end)
+        if not on then
+            local realHum = H.GetHum()
+            if realHum then
+                pcall(function()
+                    realHum:Move(Vector3.zero, false)
+                    realHum.Jump = false
+                end)
+            end
+        end
+    end
+
+    H.FreeRoamAnim = nil
+    H.FreeRoamAnimIds = {
+        idle = { "rbxassetid://507766666" },
+        walk = { "rbxassetid://507777826" },
+        fall = { "rbxassetid://507767968" },
+        jump = { "rbxassetid://507765000" },
+    }
+
+    function H.PuppetPlayAnim(name)
+        local set = H.FreeRoamAnim
+        if not set then return end
+        local list = set.tracks[name]
+        if not list or #list == 0 then name = "idle" end
+        if set.current == name then return end
+        set.current = name
+        for key, group in pairs(set.tracks) do
+            for _, track in ipairs(group) do
+                if key == name then
+                    if not track.IsPlaying then pcall(function() track:Play() end) end
+                elseif track.IsPlaying then
+                    pcall(function() track:Stop() end)
+                end
+            end
+        end
+    end
+
+    function H.PuppetBuildAnims(hum)
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+        do
+            local assets = {}
+            for _, ids in pairs(H.FreeRoamAnimIds) do
+                for _, id in ipairs(ids) do table.insert(assets, id) end
+            end
+            pcall(function() game:GetService("ContentProvider"):PreloadAsync(assets) end)
+        end
+
+        if H.FreeRoamAnim and H.FreeRoamAnim.tracks then
+            for _, group in pairs(H.FreeRoamAnim.tracks) do
+                for _, t in ipairs(group) do
+                    pcall(function() t:Stop(0) end)
+                    pcall(function() t:Destroy() end)
+                end
+            end
+        end
+        local tracks = {}
+        for name, ids in pairs(H.FreeRoamAnimIds) do
+            tracks[name] = {}
+            for _, id in ipairs(ids) do
+                local anim = Instance.new("Animation")
+                anim.AnimationId = id
+                local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+                if ok and track then
+                    track.Priority = Enum.AnimationPriority.Core
+                    track.Looped = true
+                    table.insert(tracks[name], track)
+                end
+            end
+        end
+        H.FreeRoamAnim = { tracks = tracks, current = nil }
+        if tracks.idle and tracks.idle[1] then
+            H.FreeRoamAnim.current = "idle"
+            for _, t in ipairs(tracks.idle) do pcall(function() t:Play() end) end
+        end
+    end
+
+    function H.BuildPuppet()
+        H.DestroyPuppet()
+        local char = H.LocalPlayer.Character
+        if not char then return nil end
+
+        local charArchivable = char.Archivable
+        local forced = {}
+        if not charArchivable then pcall(function() char.Archivable = true end) end
+        for _, d in ipairs(char:GetDescendants()) do
+            if d.Archivable == false then
+                forced[d] = true
+                pcall(function() d.Archivable = true end)
+            end
+        end
+
+        local ok, clone = pcall(function() return char:Clone() end)
+
+        if not charArchivable then pcall(function() char.Archivable = charArchivable end) end
+        for d in pairs(forced) do pcall(function() d.Archivable = false end) end
+
+        if not ok or not clone then return nil end
+
+        clone.Name = "houhouPuppet"
+
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.Anchored = false
+                d.CanTouch = false
+                d.CanQuery = false    
+                d.Massless = true
+                d.LocalTransparencyModifier = 0
+                if d.Name == "Hitbox" then
+                    d.Transparency = 1
+                    d.CanCollide = false
+                end
+            elseif d:IsA("BaseScript") then
+                d.Disabled = true        
+            elseif d:IsA("ForceField") then
+                d:Destroy()
+            end
+        end
+
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BasePart") and d:FindFirstAncestorOfClass("Tool") then
+                d.Transparency = 1
+            end
+        end
+
+        for _, d in ipairs(clone:GetDescendants()) do
+            local n = d.Name
+            if n == "houhouHL" or n == "houhouBB" or n == "houhouHit" or n == "SelfChamsGlow" then
+                pcall(function() d:Destroy() end)
+            end
+        end
+
+        local hum = clone:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+            hum.BreakJointsOnDeath = false
+            hum.AutoRotate = true
+            hum.MaxHealth = 1000
+            hum.Health = 1000
+            hum.WalkSpeed = H.Flags.FreeRoamSpeed or 22
+            pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true) end)
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
+
+        clone.Parent = workspace
+        H.FreeRoamPuppet = clone
+        if hum then pcall(H.PuppetBuildAnims, hum) end
+        if H.Flags.AnimEmoteOn and H.AnimEmotes then
+            local id = H.AnimEmotes[H.Flags.AnimEmote or "Dance"]
+            if id and hum then task.defer(function() pcall(H.AnimEmotePlay, "rbxassetid://" .. id) end) end
+        end
+        return clone
+    end
+
+    function H.StartFreeRoam()
+        if not H.Flags.AutoFight then return false, "Auto Fight is off" end
+        local char = H.LocalPlayer.Character
+
+        local puppet = H.FreeRoamPuppet
+        if puppet then
+            local phum = puppet:FindFirstChildOfClass("Humanoid")
+            if not (phum and puppet:FindFirstChild("HumanoidRootPart")) then
+                H.DestroyPuppet()
+                puppet = nil
+            end
+        end
+
+        local rebuilt = false
+        if not puppet then
+            if not char then return false, "no character" end
+            if not (char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Head")) then
+                return false, "character not loaded"
+            end
+            puppet = H.BuildPuppet()
+            if not puppet then return false, "clone failed" end
+            rebuilt = true
+        elseif not puppet.Parent then
+            puppet.Parent = workspace
+        end
+
+        local phum = puppet:FindFirstChildOfClass("Humanoid")
+        if phum then
+            pcall(function()
+                phum.Health = phum.MaxHealth
+                phum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+        end
+
+        local root = puppet:FindFirstChild("HumanoidRootPart") or puppet.PrimaryPart
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if root and rebuilt then
+            local spawnAt = H.FreeRoamLastPos or (hrp and hrp.Position) or Vector3.new(0, 50, 0)
+            root.CFrame = CFrame.new(spawnAt + Vector3.new(6, 3, 0))
+        end
+
+        local cam = workspace.CurrentCamera
+        if cam then
+            local look = cam.CFrame.LookVector
+            H.FreeRoamYaw = math.atan2(-look.X, -look.Z)
+        end
+        H.FreeRoamPitch = -0.15
+        H.FreeRoamLook = Vector2.new(0, 0)
+        H.FreeRoamActive = true
+        H.FreeRoamControls(false)
+        pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
+        pcall(function() H.UserInputService.MouseBehavior = Enum.MouseBehavior.Default end)
+        return true
+    end
+
+    function H.StopFreeRoam(destroy)
+        H.FreeRoamActive = false
+        H.FreeRoamControls(true)
+        if destroy then
+            H.DestroyPuppet()
+        elseif H.FreeRoamPuppet then
+            pcall(function() H.FreeRoamPuppet.Parent = nil end)
+        end
+        local cam = workspace.CurrentCamera
+        if cam then pcall(function() cam.CameraType = Enum.CameraType.Custom end) end
+        local hum = H.GetHum()
+        if cam and hum then pcall(function() cam.CameraSubject = hum end) end
+        pcall(function() H.UserInputService.MouseBehavior = Enum.MouseBehavior.Default end)
+        H.FreeRoamLook = Vector2.new(0, 0)
+    end
+
+    function H.UpdateFreeRoam(dt)
+        if not H.Flags.FreeRoam then return end
+        if not H.FreeRoamActive then
+            local ok, why = H.StartFreeRoam()
+            if not ok then
+                if H.FreeRoamWhy ~= why then
+                    H.FreeRoamWhy = why
+                    Arvn:Notify({ Title = "Free Roam", Content = "Puppet not started: " .. tostring(why), Kind = "Warning" })
+                end
+                return
+            end
+            H.FreeRoamWhy = nil
+        end
+
+        local puppet = H.FreeRoamPuppet
+        if puppet and not puppet.Parent then
+            puppet.Parent = workspace
+        elseif not puppet then
+            puppet = H.BuildPuppet()
+            if not puppet then return end
+        end
+
+        local root = puppet:FindFirstChild("HumanoidRootPart") or puppet.PrimaryPart
+        local hum = puppet:FindFirstChildOfClass("Humanoid")
+        if not root or not hum then return end
+
+        if hum.Health <= 0 then
+            pcall(function()
+                hum.Health = hum.MaxHealth
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+        end
+
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        if cam.CameraType ~= Enum.CameraType.Scriptable then
+            pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
+        end
+
+        dt = math.clamp(dt or (1 / 60), 0, 0.1)
+        H.FreeRoamLastPos = root.Position
+
+        local rmb = H.UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        if rmb ~= H.FreeRoamRMB then
+            H.FreeRoamRMB = rmb
+            H.FreeRoamSettle = 2
+            H.FreeRoamLook = Vector2.new(0, 0)
+        end
+        local wantBehavior = rmb and Enum.MouseBehavior.LockCenter or Enum.MouseBehavior.Default
+        if H.UserInputService.MouseBehavior ~= wantBehavior then
+            pcall(function() H.UserInputService.MouseBehavior = wantBehavior end)
+        end
+        if H.FreeRoamSettle > 0 then H.FreeRoamSettle = H.FreeRoamSettle - 1 end
+
+        local sens = (H.Flags.FreeRoamSensitivity or 50) * 0.0001
+        local look = H.FreeRoamLook
+        H.FreeRoamLook = Vector2.new(0, 0)
+        if H.FreeRoamSettle > 0 then
+            look = Vector2.new(0, 0)
+        else
+            local delta = H.UserInputService:GetMouseDelta()
+            if delta and delta.Magnitude > 0.01 then look = delta end
+        end
+        if look.Magnitude > 0.01 then
+            H.FreeRoamYaw = H.FreeRoamYaw - look.X * sens
+            H.FreeRoamPitch = math.clamp(H.FreeRoamPitch - look.Y * sens, -1.2, 0.9)
+        end
+
+        local k = 1.8 * dt
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Left)  then H.FreeRoamYaw = H.FreeRoamYaw + k end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Right) then H.FreeRoamYaw = H.FreeRoamYaw - k end
+
+        local yaw = H.FreeRoamYaw
+        local forward = Vector3.new(-math.sin(yaw), 0, -math.cos(yaw))
+        local right = Vector3.new(math.cos(yaw), 0, -math.sin(yaw))
+
+        local move = Vector3.zero
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + forward end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - forward end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + right end
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - right end
+        if move.Magnitude > 0 then move = move.Unit end
+
+        local realHum = H.GetHum()
+        if realHum and realHum ~= hum then
+            pcall(function() realHum:Move(Vector3.zero, false) end)
+        end
+
+        hum.WalkSpeed = H.Flags.FreeRoamSpeed or 22
+        pcall(function() hum:Move(move, false) end)
+        if H.UserInputService:IsKeyDown(Enum.KeyCode.Space) and hum.FloorMaterial ~= Enum.Material.Air then
+            hum.Jump = true
+        end
+
+        if hum.FloorMaterial == Enum.Material.Air then
+            H.PuppetPlayAnim(hum:GetState() == Enum.HumanoidStateType.Jumping and "jump" or "fall")
+        elseif hum.MoveDirection.Magnitude > 0.05 then
+            H.PuppetPlayAnim("walk")
+        else
+            H.PuppetPlayAnim("idle")
+        end
+
+        if not H.Flags.Freecam then
+            local focus = root.Position + Vector3.new(0, 2.2, 0)
+            local dirCF = CFrame.Angles(0, yaw, 0) * CFrame.Angles(H.FreeRoamPitch, 0, 0)
+            local dist = H.Flags.FreeRoamDistance or 12
+            pcall(function()
+                cam.CFrame = CFrame.new(focus) * dirCF * CFrame.new(0, 0, dist)
+            end)
+        end
+    end
+
+    H.UserInputService.InputChanged:Connect(function(input)
+        if not H.FreeRoamActive then return end
+        local t = input.UserInputType
+        if t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch then
+            local d = input.Delta
+            if d then H.FreeRoamLook = H.FreeRoamLook + Vector2.new(d.X, d.Y) end
+        end
+    end)
+
+    H.AnimTrack = nil
+    H.AnimCurrent = nil
+
+    function H.AnimStop()
+        if H.AnimTrack then
+            pcall(function() H.AnimTrack:Stop(0) end)
+            pcall(function() H.AnimTrack:Destroy() end)
+            H.AnimTrack = nil
+        end
+        H.AnimCurrent = nil
+    end
+
+    function H.AnimHum()
+        if (H.Flags.AnimTarget or "Puppet") == "Me" then return H.GetHum() end
+        local p = H.FreeRoamPuppet
+        return p and p.Parent and p:FindFirstChildOfClass("Humanoid") or nil
+    end
+
+    function H.AnimNormalizeId(v)
+        if type(v) ~= "string" then v = tostring(v or "") end
+        v = v:match("^%s*(.-)%s*$") or ""
+        local num = v:match("(%d+)")
+        if not num then return nil end
+        return "rbxassetid://" .. num
+    end
+
+    function H.AnimPlay(id, loop)
+        if id == nil or id == "" then return false end
+        local norm = H.AnimNormalizeId(id)
+        if not norm then return false end
+        local hum = H.AnimHum()
+        if not hum then return false end
+        H.AnimStop()
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+        local anim = Instance.new("Animation")
+        anim.AnimationId = norm
+        local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+        if not ok or not track then return false end
+        pcall(function()
+            track.Priority = Enum.AnimationPriority.Action4
+            track.Looped = loop and true or false
+            track:Play()
+        end)
+        H.AnimTrack = track
+        H.AnimCurrent = norm
+        return true
+    end
+
+    H.AnimPackList = {
+        "Default", "Astronaut", "Bubbly", "Cartoony", "Confident", "Cowboy",
+        "Elder", "Knight", "Levitation", "Mage", "Mocap", "Ninja", "Oldschool",
+        "Patrol", "Pirate", "Popstar", "Princess", "Robot", "Rthro", "Sneaky",
+        "Stylish", "Superhero", "Toy", "Vampire", "Werewolf", "Zombie",
+    }
+
+    H.AnimPacks = {
+        ["Default"] = {
+            idle = { "rbxassetid://507766666", "rbxassetid://507766951" },
+            walk = { "rbxassetid://507777826" }, run = { "rbxassetid://507767714" },
+            jump = { "rbxassetid://507765000" }, fall = { "rbxassetid://507767968" },
+            climb = { "rbxassetid://507765644" }, swim = { "rbxassetid://507784897", "rbxassetid://507785072" },
+            sit = { "rbxassetid://2506281703" },
+        },
+        Astronaut = {
+            run = { "rbxassetid://891636393" }, walk = { "rbxassetid://891636393" },
+            jump = { "rbxassetid://891627522" }, idle = { "rbxassetid://891621366", "rbxassetid://891633237" },
+            fall = { "rbxassetid://891617961" }, swim = { "rbxassetid://891639666", "rbxassetid://891663592" },
+            climb = { "rbxassetid://891609353" },
+        },
+        Bubbly = {
+            run = { "rbxassetid://910025107" }, walk = { "rbxassetid://910034870" },
+            jump = { "rbxassetid://910016857" }, idle = { "rbxassetid://910004836", "rbxassetid://910009958" },
+            fall = { "rbxassetid://910001910" }, swim = { "rbxassetid://910028158", "rbxassetid://910030921" },
+            climb = { "rbxassetid://909997997" },
+        },
+        Cartoony = {
+            run = { "rbxassetid://742638842" }, walk = { "rbxassetid://742640026" },
+            jump = { "rbxassetid://742637942" }, idle = { "rbxassetid://742637544", "rbxassetid://742638445" },
+            fall = { "rbxassetid://742637151" }, swim = { "rbxassetid://742639220", "rbxassetid://742639812" },
+            climb = { "rbxassetid://742636889" },
+        },
+        Confident = {
+            idle = { "rbxassetid://1069977950", "rbxassetid://1069987858" }, run = { "rbxassetid://1070001516" },
+            walk = { "rbxassetid://1070017263" }, swim = { "rbxassetid://1070009914", "rbxassetid://1070012133" },
+            jump = { "rbxassetid://1069984524" }, climb = { "rbxassetid://1069946257" }, fall = { "rbxassetid://1069973677" },
+        },
+        Cowboy = {
+            idle = { "rbxassetid://1014390418", "rbxassetid://1014398616" }, run = { "rbxassetid://1014401683" },
+            walk = { "rbxassetid://1014421541" }, swim = { "rbxassetid://1014406523", "rbxassetid://1014411816" },
+            jump = { "rbxassetid://1014394726" }, climb = { "rbxassetid://1014380606" }, fall = { "rbxassetid://1014384571" },
+        },
+        Elder = {
+            run = { "rbxassetid://845386501" }, walk = { "rbxassetid://845403856" },
+            jump = { "rbxassetid://845398858" }, idle = { "rbxassetid://845397899", "rbxassetid://845400520" },
+            fall = { "rbxassetid://845396048" }, swim = { "rbxassetid://845401742", "rbxassetid://845403127" },
+            climb = { "rbxassetid://845392038" },
+        },
+        Knight = {
+            run = { "rbxassetid://657564596" }, walk = { "rbxassetid://657552124" },
+            jump = { "rbxassetid://658409194" }, idle = { "rbxassetid://657595757", "rbxassetid://657568135" },
+            fall = { "rbxassetid://657600338" }, swim = { "rbxassetid://657560551", "rbxassetid://657557095" },
+            climb = { "rbxassetid://658360781" },
+        },
+        Levitation = {
+            run = { "rbxassetid://616010382" }, walk = { "rbxassetid://616013216" },
+            jump = { "rbxassetid://616008936" }, idle = { "rbxassetid://616006778", "rbxassetid://616008087" },
+            fall = { "rbxassetid://616005863" }, swim = { "rbxassetid://616011509", "rbxassetid://616012453" },
+            climb = { "rbxassetid://616003713" },
+        },
+        Mage = {
+            run = { "rbxassetid://707861613" }, walk = { "rbxassetid://707897309" },
+            jump = { "rbxassetid://707853694" }, idle = { "rbxassetid://707742142", "rbxassetid://707855907" },
+            fall = { "rbxassetid://707829716" }, swim = { "rbxassetid://707876443", "rbxassetid://707894699" },
+            climb = { "rbxassetid://707826056" },
+        },
+        Mocap = {
+            idle = { "rbxassetid://507766388", "rbxassetid://507766951" }, run = { "rbxassetid://507767714" },
+            walk = { "rbxassetid://507777826" }, swim = { "rbxassetid://507784897", "rbxassetid://507785072" },
+            jump = { "rbxassetid://507765000" }, climb = { "rbxassetid://507765644" }, fall = { "rbxassetid://507767968" },
+        },
+        Ninja = {
+            run = { "rbxassetid://656118852" }, walk = { "rbxassetid://656121766" },
+            jump = { "rbxassetid://656117878" }, idle = { "rbxassetid://656117400", "rbxassetid://656118341" },
+            fall = { "rbxassetid://656115606" }, swim = { "rbxassetid://656119721", "rbxassetid://656121397" },
+            climb = { "rbxassetid://656114359" },
+        },
+        Oldschool = {
+            idle = { "rbxassetid://5319828216", "rbxassetid://5319831086" }, run = { "rbxassetid://5319844329" },
+            walk = { "rbxassetid://5319847204" }, swim = { "rbxassetid://5319850266", "rbxassetid://5319852613" },
+            jump = { "rbxassetid://5319841935" }, climb = { "rbxassetid://5319816685" }, fall = { "rbxassetid://5319839762" },
+        },
+        Patrol = {
+            idle = { "rbxassetid://1149612882", "rbxassetid://1150842221" }, run = { "rbxassetid://1150967949" },
+            walk = { "rbxassetid://1151231493" }, swim = { "rbxassetid://1151204998", "rbxassetid://1151221899" },
+            jump = { "rbxassetid://1150944216" }, climb = { "rbxassetid://1148811837" }, fall = { "rbxassetid://1148863382" },
+        },
+        Pirate = {
+            run = { "rbxassetid://750783738" }, walk = { "rbxassetid://750785693" },
+            jump = { "rbxassetid://750782230" }, idle = { "rbxassetid://750781874", "rbxassetid://750782770" },
+            fall = { "rbxassetid://750780242" }, swim = { "rbxassetid://750784579", "rbxassetid://750785176" },
+            climb = { "rbxassetid://750779899" },
+        },
+        Popstar = {
+            idle = { "rbxassetid://1212900985", "rbxassetid://1212954651" }, run = { "rbxassetid://1212980348" },
+            walk = { "rbxassetid://1212980338" }, swim = { "rbxassetid://1212852603", "rbxassetid://1212998578" },
+            jump = { "rbxassetid://1212954642" }, climb = { "rbxassetid://1213044953" }, fall = { "rbxassetid://1212900995" },
+        },
+        Princess = {
+            idle = { "rbxassetid://941003647", "rbxassetid://941013098" }, run = { "rbxassetid://941015281" },
+            walk = { "rbxassetid://941028902" }, swim = { "rbxassetid://941018893", "rbxassetid://941025398" },
+            jump = { "rbxassetid://941008832" }, climb = { "rbxassetid://940996062" }, fall = { "rbxassetid://941000007" },
+        },
+        Robot = {
+            run = { "rbxassetid://616091570" }, walk = { "rbxassetid://616095330" },
+            jump = { "rbxassetid://616090535" }, idle = { "rbxassetid://616088211", "rbxassetid://616089559" },
+            fall = { "rbxassetid://616087089" }, swim = { "rbxassetid://616092998", "rbxassetid://616094091" },
+            climb = { "rbxassetid://616086039" },
+        },
+        Rthro = {
+            run = { "rbxassetid://2510198475" }, walk = { "rbxassetid://2510202577" },
+            jump = { "rbxassetid://2510197830" }, idle = { "rbxassetid://2510197257", "rbxassetid://2510196951" },
+            fall = { "rbxassetid://2510195892" }, swim = { "rbxassetid://2510199791", "rbxassetid://2510201162" },
+            climb = { "rbxassetid://2510192778" },
+        },
+        Sneaky = {
+            idle = { "rbxassetid://1132473842", "rbxassetid://1132477671" }, run = { "rbxassetid://1132494274" },
+            walk = { "rbxassetid://1132510133" }, swim = { "rbxassetid://1132500520", "rbxassetid://1132506407" },
+            jump = { "rbxassetid://1132489853" }, climb = { "rbxassetid://1132461372" }, fall = { "rbxassetid://1132469004" },
+        },
+        Stylish = {
+            run = { "rbxassetid://616140816" }, walk = { "rbxassetid://616146177" },
+            jump = { "rbxassetid://616139451" }, idle = { "rbxassetid://616136790", "rbxassetid://616138447" },
+            fall = { "rbxassetid://616134815" }, swim = { "rbxassetid://616143378", "rbxassetid://616144772" },
+            climb = { "rbxassetid://616133594" },
+        },
+        Superhero = {
+            run = { "rbxassetid://616117076" }, walk = { "rbxassetid://616122287" },
+            jump = { "rbxassetid://616115533" }, idle = { "rbxassetid://616111295", "rbxassetid://616113536" },
+            fall = { "rbxassetid://616108001" }, swim = { "rbxassetid://616119360", "rbxassetid://616120861" },
+            climb = { "rbxassetid://616104706" },
+        },
+        Toy = {
+            run = { "rbxassetid://782842708" }, walk = { "rbxassetid://782843345" },
+            jump = { "rbxassetid://782847020" }, idle = { "rbxassetid://782841498", "rbxassetid://782845736" },
+            fall = { "rbxassetid://782846423" }, swim = { "rbxassetid://782844582", "rbxassetid://782845186" },
+            climb = { "rbxassetid://782843869" },
+        },
+        Vampire = {
+            run = { "rbxassetid://1083462077" }, walk = { "rbxassetid://1083473930" },
+            jump = { "rbxassetid://1083455352" }, idle = { "rbxassetid://1083445855", "rbxassetid://1083450166" },
+            fall = { "rbxassetid://1083443587" }, swim = { "rbxassetid://1083464683", "rbxassetid://1083467779" },
+            climb = { "rbxassetid://1083439238" },
+        },
+        Werewolf = {
+            run = { "rbxassetid://1083216690" }, walk = { "rbxassetid://1083178339" },
+            jump = { "rbxassetid://1083218792" }, idle = { "rbxassetid://1083195517", "rbxassetid://1083214717" },
+            fall = { "rbxassetid://1083189019" }, swim = { "rbxassetid://1083222527", "rbxassetid://1083225406" },
+            climb = { "rbxassetid://1083182000" },
+        },
+        Zombie = {
+            run = { "rbxassetid://616163682" }, walk = { "rbxassetid://616168032" },
+            jump = { "rbxassetid://616161997" }, idle = { "rbxassetid://616158929", "rbxassetid://616160636" },
+            fall = { "rbxassetid://616157476" }, swim = { "rbxassetid://616165109", "rbxassetid://616166655" },
+            climb = { "rbxassetid://616156119" },
+        },
+    }
+
+    H.AnimSlotDefs = {
+        { key = "idle",     label = "Idle 1",    folder = "idle",     child = "Animation1", packKey = "idle",  packIndex = 1 },
+        { key = "idle2",    label = "Idle 2",    folder = "idle",     child = "Animation2", packKey = "idle",  packIndex = 2 },
+        { key = "walk",     label = "Walk",      folder = "walk",     child = "WalkAnim",   packKey = "walk",  packIndex = 1 },
+        { key = "run",      label = "Run",       folder = "run",      child = "RunAnim",    packKey = "run",   packIndex = 1 },
+        { key = "jump",     label = "Jump",      folder = "jump",     child = "JumpAnim",   packKey = "jump",  packIndex = 1 },
+        { key = "fall",     label = "Fall",      folder = "fall",     child = "FallAnim",   packKey = "fall",  packIndex = 1 },
+        { key = "climb",    label = "Climb",     folder = "climb",    child = "ClimbAnim",  packKey = "climb", packIndex = 1 },
+        { key = "swim",     label = "Swim",      folder = "swim",     child = "Swim",       packKey = "swim",  packIndex = 1 },
+        { key = "swimidle", label = "Swim Idle", folder = "swimidle", child = "SwimIdle",   packKey = "swim",  packIndex = 2 },
+        { key = "sit",      label = "Sit",       folder = "sit",      child = "SitAnim",    packKey = "sit",   packIndex = 1 },
+    }
+
+    function H.AnimSlotSource(slot)
+        local v = H.Flags["AnimSrc_" .. slot.key]
+        if type(v) == "table" then v = v[1] end
+        if v == nil or v == "" then return "Original" end
+        return v
+    end
+
+    function H.AnimPackId(pack, slot)
+        if not pack then return nil end
+        local list = pack[slot.packKey]
+        if type(list) ~= "table" or #list == 0 then return nil end
+        return H.AnimNormalizeId(list[math.min(slot.packIndex, #list)])
+    end
+
+    function H.AnimResolveId(slot)
+        local src = H.AnimSlotSource(slot)
+        if src == "Original" then return nil end
+        if src == "Pack Default" then src = "Default" end
+        return H.AnimPackId(H.AnimPacks[src], slot)
+    end
+
+    function H.AnimGetAnimate()
+        local char = H.LocalPlayer.Character
+        return char and char:FindFirstChild("Animate") or nil
+    end
+
+    function H.AnimInstance(animate, slot)
+        local folder = animate:FindFirstChild(slot.folder)
+        if not folder then return nil end
+        local obj = folder:FindFirstChild(slot.child)
+        if obj and obj:IsA("Animation") then return obj end
+        local n = 0
+        for _, c in ipairs(folder:GetChildren()) do
+            if c:IsA("Animation") then
+                n = n + 1
+                if n == slot.packIndex then return c end
+            end
+        end
+        return folder:FindFirstChildWhichIsA("Animation")
+    end
+
+    H.AnimOriginals = nil
+
+    function H.AnimPreloadIds(ids)
+        if not ids or #ids == 0 then return end
+        pcall(function() game:GetService("ContentProvider"):PreloadAsync(ids) end)
+    end
+
+    function H.AnimSyncPuppet()
+        local function pick(key)
+            for _, slot in ipairs(H.AnimSlotDefs) do
+                if slot.key == key then
+                    if H.AnimSlotSource(slot) == "Original" then
+                        return H.AnimOriginals and H.AnimOriginals[slot.key] or nil
+                    end
+                    return H.AnimResolveId(slot)
+                end
+            end
+            return nil
+        end
+        H.FreeRoamAnimIds = {
+            idle = { pick("idle") or "rbxassetid://507766666" },
+            walk = { pick("walk") or "rbxassetid://507777826" },
+            fall = { pick("fall") or "rbxassetid://507767968" },
+            jump = { pick("jump") or "rbxassetid://507765000" },
+        }
+        local p = H.FreeRoamPuppet
+        if p then
+            local phum = p:FindFirstChildOfClass("Humanoid")
+            if phum then pcall(H.PuppetBuildAnims, phum) end
+        end
+    end
+
+    function H.AnimRestart()
+        local animate = H.AnimGetAnimate()
+        if not animate then return end
+
+        local ownIds = {}
+        for _, d in ipairs(animate:GetDescendants()) do
+            if d:IsA("Animation") then ownIds[d.AnimationId] = true end
+        end
+
+        task.spawn(function()
+            local char = H.LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local animator = hum and hum:FindFirstChildOfClass("Animator")
+
+            pcall(function() animate.Disabled = true end)
+            task.wait()
+
+            if animator then
+                local ok, tracks = pcall(function() return animator:GetPlayingAnimationTracks() end)
+                if ok and tracks then
+                    for _, t in ipairs(tracks) do
+                        local anim = t.Animation
+                        if anim and ownIds[anim.AnimationId] then
+                            pcall(function() t:Stop(0) end)
+                            pcall(function() t:Destroy() end)
+                        end
+                    end
+                end
+            end
+
+            pcall(function() animate.Disabled = false end)
+
+            if H.Flags.AnimEmoteOn then
+                task.wait(0.1)
+                local id = H.AnimEmotes and H.AnimEmotes[H.Flags.AnimEmote or "Dance"]
+                if id then pcall(H.AnimEmotePlay, "rbxassetid://" .. id) end
+            end
+        end)
+    end
+
+    function H.AnimRebuild()
+        local char = H.LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum then return false end
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if animator then pcall(function() animator:Destroy() end) end
+        local fresh = Instance.new("Animator")
+        fresh.Parent = hum
+        return true
+    end
+
+    function H.AnimApply()
+        local animate = H.AnimGetAnimate()
+        if not animate then
+            local char = H.LocalPlayer.Character
+            if char then pcall(function() char:WaitForChild("Animate", 3) end) end
+            animate = H.AnimGetAnimate()
+        end
+        if not animate then return false end
+
+        H.AnimOriginals = H.AnimOriginals or {}
+        local used = {}
+
+        for _, slot in ipairs(H.AnimSlotDefs) do
+            local obj = H.AnimInstance(animate, slot)
+            if obj then
+                if H.AnimOriginals[slot.key] == nil then
+                    H.AnimOriginals[slot.key] = obj.AnimationId
+                end
+                local src = H.AnimSlotSource(slot)
+                local id
+                if src == "Original" then
+                    id = H.AnimOriginals[slot.key]
+                else
+                    id = H.AnimResolveId(slot)
+                end
+                if id then
+                    if obj.AnimationId ~= id then
+                        pcall(function() obj.AnimationId = id end)
+                    end
+                    used[#used + 1] = id
+                end
+            end
+        end
+
+        H.AnimPreloadIds(used)
+        H.AnimSyncPuppet()
+        H.AnimRestart()
+        return true
+    end
+
+    H.AnimApplyQueued = false
+    function H.AnimApplySoon()
+        if H.AnimApplyQueued then return end
+        H.AnimApplyQueued = true
+        task.delay(0.08, function()
+            H.AnimApplyQueued = false
+            pcall(H.AnimApply)
+        end)
+    end
+
+    function H.AnimActive()
+        for _, slot in ipairs(H.AnimSlotDefs) do
+            local src = H.AnimSlotSource(slot)
+            if src ~= "Original" then return true end
+        end
+        return false
+    end
+
+    function H.AnimRestore()
+        for _, slot in ipairs(H.AnimSlotDefs) do
+            H.Flags["AnimSrc_" .. slot.key] = "Original"
+        end
+        local animate = H.AnimGetAnimate()
+        local saved = H.AnimOriginals
+        if animate and saved then
+            for _, slot in ipairs(H.AnimSlotDefs) do
+                local id = saved[slot.key]
+                if id then
+                    local obj = H.AnimInstance(animate, slot)
+                    if obj then pcall(function() obj.AnimationId = id end) end
+                end
+            end
+        end
+        H.AnimRestart()
+    end
+
+    H.AddConn(H.LocalPlayer.CharacterAdded:Connect(function()
+        H.AnimOriginals = nil
+        task.wait(0.6)
+        if H.AnimActive() then pcall(H.AnimApply) end
+    end))
+
+    task.spawn(function()
+        for _, pack in pairs(H.AnimPacks) do
+            local ids = {}
+            for _, list in pairs(pack) do
+                for _, id in ipairs(list) do
+                    local n = H.AnimNormalizeId(id)
+                    if n then ids[#ids + 1] = n end
+                end
+            end
+            pcall(H.AnimPreloadIds, ids)
+            task.wait(0.05)
+        end
+    end)
+
+    H.AnimEmoteTracks = {}
+
+    function H.AnimEmoteStop()
+        for t in pairs(H.AnimEmoteTracks) do
+            pcall(function() t:Stop(0) end)
+            pcall(function() t:Destroy() end)
+        end
+        H.AnimEmoteTracks = {}
+    end
+
+    local function emoteOne(hum, id)
+        if not hum then return end
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+        local anim = Instance.new("Animation")
+        anim.AnimationId = id
+        local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+        if ok and track then
+            pcall(function()
+                track.Priority = Enum.AnimationPriority.Action4
+                track.Looped = true
+                track:Play()
+            end)
+            H.AnimEmoteTracks[track] = true
+        end
+    end
+
+    function H.AnimEmotePlay(id)
+        H.AnimEmoteStop()
+        if id == nil or id == "" then return false end
+        id = H.AnimNormalizeId(id) or id
+        local any = false
+        local hum = H.GetHum()
+        if hum then emoteOne(hum, id) any = true end
+        local p = H.FreeRoamPuppet
+        if p then
+            local phum = p:FindFirstChildOfClass("Humanoid")
+            if phum then emoteOne(phum, id) any = true end
+        end
+        return any
+    end
+
+    H.RemovalSaved = { effects = {}, shadows = nil, softness = nil, terrain = nil }
+
+    
+
+    function H.ApplyRemovePostFX(on)
+        for _, c in ipairs(H.Lighting:GetChildren()) do
+            if c:IsA("PostEffect") then
+                if on then
+                    if H.RemovalSaved.effects[c] == nil then H.RemovalSaved.effects[c] = c.Enabled end
+                    pcall(function() c.Enabled = false end)
+                elseif H.RemovalSaved.effects[c] ~= nil then
+                    pcall(function() c.Enabled = H.RemovalSaved.effects[c] end)
+                    H.RemovalSaved.effects[c] = nil
+                end
+            end
+        end
+    end
+
+    function H.ApplyRemoveShadows(on)
+        if on then
+            if H.RemovalSaved.shadows == nil then
+                H.RemovalSaved.shadows = H.Lighting.GlobalShadows
+                H.RemovalSaved.softness = H.Lighting.ShadowSoftness
+            end
+            pcall(function() H.Lighting.GlobalShadows = false end)
+            pcall(function() H.Lighting.ShadowSoftness = 0 end)
+        elseif H.RemovalSaved.shadows ~= nil then
+            pcall(function() H.Lighting.GlobalShadows = H.RemovalSaved.shadows end)
+            pcall(function() H.Lighting.ShadowSoftness = H.RemovalSaved.softness end)
+            H.RemovalSaved.shadows = nil
+        end
+    end
+
+    function H.ApplyRemoveGrass(on)
+        if on then
+            if H.RemovalSaved.terrain == nil then H.RemovalSaved.terrain = workspace.Terrain.Decoration end
+            pcall(function() workspace.Terrain.Decoration = false end)
+        elseif H.RemovalSaved.terrain ~= nil then
+            pcall(function() workspace.Terrain.Decoration = H.RemovalSaved.terrain end)
+            H.RemovalSaved.terrain = nil
+        end
+    end
+
+    H.AtmosphereOrig = nil
+    function H.ApplyAtmosphere()
+        local atm = H.Lighting:FindFirstChildOfClass("Atmosphere")
+        if H.Flags.AtmosphereEnabled then
+            if not atm then
+                atm = Instance.new("Atmosphere")
+                atm.Name = "houhouAtmosphere"
+                atm.Parent = H.Lighting
+            end
+            if not H.AtmosphereOrig then
+                H.AtmosphereOrig = { Density = atm.Density, Haze = atm.Haze, Glare = atm.Glare, Color = atm.Color }
+            end
+            pcall(function() atm.Density = (H.Flags.AtmosphereDensity or 35) / 100 end)
+            pcall(function() atm.Haze = (H.Flags.AtmosphereHaze or 0) / 100 end)
+            pcall(function() atm.Glare = (H.Flags.AtmosphereGlare or 0) / 100 end)
+            pcall(function() atm.Color = H.NormalizeColor(H.Flags.AtmosphereColor, Color3.fromRGB(199, 199, 199)) end)
+        elseif atm and H.AtmosphereOrig then
+            pcall(function()
+                atm.Density = H.AtmosphereOrig.Density
+                atm.Haze = H.AtmosphereOrig.Haze
+                atm.Glare = H.AtmosphereOrig.Glare
+                atm.Color = H.AtmosphereOrig.Color
+            end)
+            H.AtmosphereOrig = nil
+        end
+    end
+
+    
+end
+
+do
     local LocalPlayer = H.LocalPlayer
     local Players = H.Players
     local RunService = H.RunService
@@ -6215,9 +7947,24 @@ do
         pcall(H.ApplyAimbot)
     end)
 
+    pcall(function() RunService:UnbindFromRenderStep("houhouFreecam") end)
+    RunService:BindToRenderStep("houhouFreecam", Enum.RenderPriority.Camera.Value + 2, function(dt)
+        pcall(H.UpdateFreecam, dt)
+    end)
+
+    pcall(function() RunService:UnbindFromRenderStep("houhouFreeRoam") end)
+    RunService:BindToRenderStep("houhouFreeRoam", Enum.RenderPriority.Camera.Value + 3, function(dt)
+        pcall(H.UpdateFreeRoam, dt)
+    end)
+
     H.AddConn(RunService.Heartbeat:Connect(function()
         pcall(H.UpdateFOVCircle)
         pcall(H.UpdateSilentFOVCircle)
+        pcall(H.UpdateSilentAimVisual)
+        pcall(H.UpdateHitmarker)
+        pcall(H.UpdateDamageNumbers)
+        pcall(H.UpdateOffscreen)
+        pcall(H.UpdateSkeleton)
         pcall(H.UpdateESP)
         pcall(H.CheckESPHealth)
         pcall(H.UpdateRapidFire)
@@ -6389,6 +8136,7 @@ do
 
     H.BuildFOVCircle()
     H.BuildSilentFOVCircle()
+    H.InitSilentAimVisual()
     H.InstallSilentHooks()
     H.ApplyFullbright()
     H.ApplyNoFog()
@@ -6417,6 +8165,18 @@ do
     H.AddConn(Players.PlayerRemoving:Connect(function(plr)
         H.RemoveESP(plr)
         H.TracerObjects[plr] = nil
+        local oo = H.OffscreenObjects[plr]
+        if oo then
+            for _, l in ipairs(oo.lines) do pcall(function() l:Remove() end) end
+            if oo.text then pcall(function() oo.text:Remove() end) end
+            H.OffscreenObjects[plr] = nil
+        end
+        local so = H.SkeletonObjects[plr]
+        if so then
+            for _, l in ipairs(so.lines) do pcall(function() l:Remove() end) end
+            H.SkeletonObjects[plr] = nil
+        end
+        H.DamageNumberActive[plr] = nil
         H.AutoStompLast[plr] = nil
         H.RageTargets[plr] = nil
         H.RageTargetReady[plr] = nil
@@ -6439,6 +8199,14 @@ do
         H.SilentCachedPart = nil
         H.RageTPQueue = nil
         task.wait(0.4)
+        if H.Flags.AnimPack and H.Flags.AnimPack ~= "Default" then
+            task.wait(0.2)
+            pcall(H.AnimApply)
+        end
+        if H.Flags.AnimEmoteOn and H.AnimEmotes then
+            local id = H.AnimEmotes[H.Flags.AnimEmote or "Dance"]
+            if id then pcall(H.AnimEmotePlay, "rbxassetid://" .. id) end
+        end
         if H.Flags.SpeedEnabled then
             H.applySpeed(true)
             H.StartSpeedLoop()
