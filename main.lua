@@ -53,6 +53,7 @@ do
     H.Flags             = Arvn.Flags
 
     H.Flags.NoSpread           = H.Flags.NoSpread or false
+    H.Flags.AimbotUnlockOnKill = H.Flags.AimbotUnlockOnKill or false
     H.Flags.OrbitEnabled       = H.Flags.OrbitEnabled or false
     H.Flags.SilentAimHitChance = H.Flags.SilentAimHitChance or 100
     H.Flags.Optimize           = H.Flags.Optimize or false
@@ -255,6 +256,25 @@ do
         local ok, err = pcall(fn, ...)
         if not ok then warn("[houhou] " .. tostring(err)) end
         return ok, err
+    end
+
+    function H.SetFlag(flag, value)
+        local A = Arvn
+        if A then
+            local el = A.Elements and A.Elements[flag]
+            if el then
+                if type(el.Set) == "function" then
+                    pcall(el.Set, el, value)
+                elseif type(el.SetValue) == "function" then
+                    pcall(el.SetValue, el, value)
+                end
+            end
+            local opt = A.Options and A.Options[flag]
+            if opt and type(opt.Set) == "function" then
+                pcall(opt.Set, opt, value)
+            end
+        end
+        H.Flags[flag] = value
     end
 
     function H.IsFinite(n)
@@ -643,6 +663,19 @@ do
     function H.ApplyAimbot()
         H.Camera = workspace.CurrentCamera or Camera
         if not H.Flags.AimbotEnabled then H.Target = nil return end
+
+        if H.Flags.AimbotUnlockOnKill and H.Target then
+            local prev = H.Target
+            local pchar = prev.Character
+            if not pchar or not H.IsAlive(prev) or H.IsKnocked(prev)
+                or (H.AimbotLockChar and H.AimbotLockChar ~= pchar) then
+                H.AimbotLockChar = nil
+                H.Target = nil
+                H.SetFlag("AimbotEnabled", false)
+                return
+            end
+            H.AimbotLockChar = pchar
+        end
 
         local function PassesChecksForSticky(plr)
             if not plr or plr == LocalPlayer then return false end
@@ -4049,12 +4082,13 @@ do
         local AimbotTab = Group:Tab({ Name = "Aimbot", Icon = "crosshair" })
         H_.AimbotTab = AimbotTab
         local AimbotSection = AimbotTab:Section({ Name = "Aimbot Settings", Side = "Left" })
-        AimbotSection:Toggle({ Name = "Aimbot Enabled", Flag = "AimbotEnabled", Default = false, Keybind = "V", Callback = function(v) H_.Flags.AimbotEnabled = v end })
+        AimbotSection:Toggle({ Name = "Aimbot Enabled", Flag = "AimbotEnabled", Default = false, Keybind = "V", Callback = function(v) H_.Flags.AimbotEnabled = v if v then H_.AimbotLockChar = nil end end })
         AimbotSection:Dropdown({ Name = "Aimbot Type", Flag = "AimbotType", Values = {"Camera", "Mouse"}, Default = "Camera", Callback = function(v) H_.Flags.AimbotType = v end })
         AimbotSection:Dropdown({ Name = "Hit Part", Flag = "AimbotHitPart", Values = {"Head", "HumanoidRootPart", "Closest"}, Default = "Head", Callback = function(v) H_.Flags.AimbotHitPart = v end })
         AimbotSection:Dropdown({ Name = "Target Method", Flag = "AimbotMethod", Values = {"Closest to Mouse", "Closest Distance", "FOV"}, Default = "Closest to Mouse", Callback = function(v) H_.Flags.AimbotMethod = v end })
         AimbotSection:Toggle({ Name = "Sticky Aim", Flag = "AimbotStickyAim", Default = false, Callback = function(v) H_.Flags.AimbotStickyAim = v end })
         AimbotSection:Toggle({ Name = "Unlock on Death", Flag = "AimbotUnlockOnDeath", Default = true, Callback = function(v) H_.Flags.AimbotUnlockOnDeath = v end })
+        AimbotSection:Toggle({ Name = "Unlock on Kill", Flag = "AimbotUnlockOnKill", Default = false, Callback = function(v) H_.Flags.AimbotUnlockOnKill = v if v then H_.AimbotLockChar = nil H_.Target = nil end end })
         AimbotSection:Toggle({ Name = "Prediction", Flag = "AimbotPrediction", Default = false, Callback = function(v) H_.Flags.AimbotPrediction = v end })
         AimbotSection:Slider({ Name = "Prediction Value", Flag = "AimbotPredictionValue", Min = 0, Max = 100, Default = 16, Callback = function(v) H_.Flags.AimbotPredictionValue = v end })
 
