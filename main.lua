@@ -5988,7 +5988,8 @@ do
         do
             local Players = game:GetService("Players")
             local lpl = Players.LocalPlayer
-            local CFG = { standOut = 3, settle = 0.15, arriveWait = 0.35, confirmTimeout = 2.5, shopTimeout = 3, tries = 8, retryDelay = 0.05, verifyWait = 0.2, armorMax = 200 }
+            local CFG = { standOut = 3, settle = 0.15, arriveWait = 0.35, confirmTimeout = 2.5, shopTimeout = 3, tries = 8, retryDelay = 0.05, verifyWait = 0.2, armorMax = 200,
+                underground = true, undergroundDepth = 6.5, maxClickDist = 8, blinkWindow = 0.4, keepAtMax = true }
             local buying = false
             local shop
 
@@ -6132,6 +6133,38 @@ do
             end
             AutoBuy.armorIsFull = armorIsFull
 
+            local function blinkPart(g, cf)
+                local cam = workspace.CurrentCamera
+                local d = cf.Position - g.Position
+                pcall(function() g.CFrame = cf end)
+                if cam then pcall(function() cam.CFrame = cam.CFrame + d end) end
+            end
+
+            local function setCharHidden(on)
+                local c = char()
+                if not c then return end
+                for _, p in ipairs(c:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        pcall(function() p.LocalTransparencyModifier = on and 1 or 0 end)
+                    end
+                end
+            end
+
+            local function underStall(hd)
+                if not hd or not hd.Parent then return nil end
+                local filter = { hd.Parent }
+                local c = char()
+                if c then table.insert(filter, c) end
+                local rp = RaycastParams.new()
+                rp.FilterType = Enum.RaycastFilterType.Exclude
+                rp.FilterDescendantsInstances = filter
+                local hit = workspace:Raycast(hd.Position + Vector3.new(0, 2, 0), Vector3.new(0, -250, 0), rp)
+                if not hit then return nil end
+                local y = hit.Position.Y - CFG.undergroundDepth
+                if hd.Position.Y - y > CFG.maxClickDist then y = hd.Position.Y - CFG.maxClickDist end
+                return CFrame.new(hd.Position.X, y, hd.Position.Z)
+            end
+
             function AutoBuy.armor()
                 if buying then return false end
                 buying = true
@@ -6139,11 +6172,51 @@ do
                     if armorIsFull() then return true end
                     for _ = 1, CFG.tries do
                         if not waitShop() then return false end
+                        local t = findStall("full armor")
+                        if not t then return false end
+                        local g, h = root(), humanoid()
+                        if not g or not h or isKO() then return false end
+
                         local before = flagVal("Armor") or 0
-                        local function gained() return (flagVal("Armor") or 0) > before or armorIsFull() end
-                        fireStall(findStall("full armor"), gained)
+                        local origin = g.CFrame
+                        local ov, oav = g.AssemblyLinearVelocity, g.AssemblyAngularVelocity
+
+                        local target = CFG.underground and underStall(t.hd) or nil
+                        if not target then
+                            target = CFrame.new(t.stand.Position + Vector3.new(CFG.standOut, 0, 0))
+                        end
+
+                        setCharHidden(true)
+                        blinkPart(g, target)
+
+                        local done, gained = false, false
+                        local t0 = tick()
+                        local conn
+                        conn = game:GetService("RunService").Stepped:Connect(function()
+                            if done then return end
+                            g.CFrame = target
+                            g.AssemblyLinearVelocity = Vector3.zero
+                            g.AssemblyAngularVelocity = Vector3.zero
+                            if t.cd and t.cd.Parent then
+                                for _ = 1, 3 do pcall(fireclickdetector, t.cd) end
+                            end
+                            if (flagVal("Armor") or 0) > before or armorIsFull() then
+                                gained, done = true, true
+                            elseif tick() - t0 > CFG.blinkWindow then
+                                done = true
+                            end
+                        end)
+                        while not done do task.wait() end
+                        conn:Disconnect()
+
+                        if g.Parent then
+                            g.CFrame = origin
+                            g.AssemblyLinearVelocity, g.AssemblyAngularVelocity = ov, oav
+                        end
+                        setCharHidden(false)
+
                         waitShop()
-                        if armorIsFull() then return true end
+                        if gained or armorIsFull() then return true end
                         task.wait(CFG.retryDelay)
                     end
                     return false
@@ -6219,10 +6292,49 @@ do
                     if not findStim() then
                         for _ = 1, CFG.tries do
                             if not waitShop() then return false end
-                            fireStall(findStall("stim"), findStim)
+                            local t = findStall("stim")
+                            if not t then return false end
+                            local g, h = root(), humanoid()
+                            if not g or not h or isKO() then return false end
+
+                            local origin = g.CFrame
+                            local ov, oav = g.AssemblyLinearVelocity, g.AssemblyAngularVelocity
+                            local target = CFG.underground and underStall(t.hd) or nil
+                            if not target then
+                                target = CFrame.new(t.stand.Position + Vector3.new(CFG.standOut, 0, 0))
+                            end
+
+                            setCharHidden(true)
+                            blinkPart(g, target)
+
+                            local done, got = false, false
+                            local t0 = tick()
+                            local conn
+                            conn = game:GetService("RunService").Stepped:Connect(function()
+                                if done then return end
+                                g.CFrame = target
+                                g.AssemblyLinearVelocity = Vector3.zero
+                                g.AssemblyAngularVelocity = Vector3.zero
+                                if t.cd and t.cd.Parent then
+                                    for _ = 1, 3 do pcall(fireclickdetector, t.cd) end
+                                end
+                                if findStim() then
+                                    got, done = true, true
+                                elseif tick() - t0 > CFG.blinkWindow then
+                                    done = true
+                                end
+                            end)
+                            while not done do task.wait() end
+                            conn:Disconnect()
+
+                            if g.Parent then
+                                g.CFrame = origin
+                                g.AssemblyLinearVelocity, g.AssemblyAngularVelocity = ov, oav
+                            end
+                            setCharHidden(false)
+
                             waitShop()
-                            task.wait(CFG.verifyWait)
-                            if findStim() then break end
+                            if got or findStim() then break end
                             task.wait(CFG.retryDelay)
                         end
                     end
@@ -6235,10 +6347,25 @@ do
             function AutoBuy.isBusy() return buying end
             H_.AutoBuy = AutoBuy
 
-            local lastHealth, lastArmor, lastDamageAt, stimPending = nil, nil, 0, false
+local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, false, 0
+            local armorSignalObj
+            local function bindArmorSignal()
+                local b = bodyEffects()
+                local a = b and b:FindFirstChild("Armor")
+                if not a or a == armorSignalObj then return end
+                armorSignalObj = a
+                a:GetPropertyChangedSignal("Value"):Connect(function()
+                    if H_.Flags.AutoArmor and not buying and (flagVal("Armor") or 0) < CFG.armorMax then
+                        task.spawn(function()
+                            if not buying and H_.Flags.AutoArmor then pcall(AutoBuy.armor) end
+                        end)
+                    end
+                end)
+            end
             task.spawn(function()
                 while true do
                     task.wait()
+                    bindArmorSignal()
                     local wantArmor, wantStim = H_.Flags.AutoArmor, H_.Flags.AutoStim
                     local hum = humanoid()
                     local armor = flagVal("Armor") or 0
@@ -6262,6 +6389,13 @@ do
                                     stimPending = false
                                     AutoBuy.stim()
                                 end
+                            end)
+                        end
+                        if CFG.keepAtMax and wantArmor and not buying and hum.Health > 0
+                            and armor < CFG.armorMax - 0.5 and tick() - lastKeep > 0.3 then
+                            lastKeep = tick()
+                            task.spawn(function()
+                                if not buying then pcall(AutoBuy.armor) end
                             end)
                         end
                     end
