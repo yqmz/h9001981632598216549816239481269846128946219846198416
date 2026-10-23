@@ -52,6 +52,9 @@ do
     H.Mouse             = H.LocalPlayer:GetMouse()
     H.Flags             = Arvn.Flags
 
+    H._snap = H.Players:GetPlayers()
+    H._present = {}
+
     H.Flags.NoSpread           = H.Flags.NoSpread or false
     H.Flags.AimbotUnlockOnKill = H.Flags.AimbotUnlockOnKill or false
     H.Flags.OrbitEnabled       = H.Flags.OrbitEnabled or false
@@ -233,6 +236,12 @@ do
         return fallback
     end
 
+    function H.SnapPlayers()
+        local p = H.Players:GetPlayers()
+        H._snap = p
+        return p
+    end
+
     function H.AddConn(c)
         table.insert(H.Connections, c)
         return c
@@ -302,20 +311,31 @@ do
         return h and h.Health > 0
     end
 
+    H._koCache = {}
+
     function H.IsKO(plr)
         local c = plr and plr.Character
         if not c then return false, false end
+        local e = H._koCache[plr]
+        local now = tick()
+        if e and now - e.t < 0.05 then return e.ko, e.grab end
         local be = c:FindFirstChild("BodyEffects")
         local isKO = false
         if be then
-            local ko = be:FindFirstChild("K.O") or be:FindFirstChild("Knocked")
-                or be:FindFirstChild("k.o") or be:FindFirstChild("KO")
-            if ko and ko.Value == true then isKO = true end
+            local ko = be:FindFirstChild("K.O")
+            if ko then
+                if ko.Value == true then isKO = true end
+            else
+                local k2 = be:FindFirstChild("Knocked") or be:FindFirstChild("k.o") or be:FindFirstChild("KO")
+                if k2 and k2.Value == true then isKO = true end
+            end
         end
         local hum = c:FindFirstChildOfClass("Humanoid")
         local isDowned = hum and hum:GetState() == Enum.HumanoidStateType.Physics
         local isGrabbed = c:FindFirstChild("GRABBING_CONSTRAINT") ~= nil
-        return (isKO or isDowned), isGrabbed
+        local r1, r2 = (isKO or isDowned), isGrabbed
+        H._koCache[plr] = { ko = r1, grab = r2, t = now }
+        return r1, r2
     end
 
     function H.IsKnocked(plr)
@@ -337,18 +357,28 @@ do
         return H.IsWhitelisted(plr)
     end
 
+    H._ffCache = {}
+
     function H.HasForceField(plr)
         local c = plr and plr.Character
         if not c then return false end
-        if c:FindFirstChildOfClass("ForceField") ~= nil then return true end
-        local be = c:FindFirstChild("BodyEffects")
-        if be then
-            local ff = be:FindFirstChild("ForceField")
-            if ff and (ff:IsA("BoolValue") and ff.Value or ff:IsA("ForceField")) then
-                return true
+        local e = H._ffCache[plr]
+        local now = tick()
+        if e and now - e.t < 0.05 and e.char == c then return e.v end
+        local v = false
+        if c:FindFirstChildOfClass("ForceField") ~= nil then
+            v = true
+        else
+            local be = c:FindFirstChild("BodyEffects")
+            if be then
+                local ff = be:FindFirstChild("ForceField")
+                if ff and (ff:IsA("BoolValue") and ff.Value or ff:IsA("ForceField")) then
+                    v = true
+                end
             end
         end
-        return false
+        H._ffCache[plr] = { v = v, t = now, char = c }
+        return v
     end
 
     function H.GetTargetPart(plr, partName)
@@ -368,26 +398,31 @@ do
         return c:FindFirstChild(partName)
     end
 
+    H._visParams = RaycastParams.new()
+    H._visParams.FilterType = Enum.RaycastFilterType.Exclude
+    H._visFilter = { false, false }
+
     function H.IsVisible(part)
         if not part then return false end
         local origin = Camera.CFrame.Position
         local dir = part.Position - origin
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-        local result = workspace:Raycast(origin, dir, params)
+        H._visFilter[1] = LocalPlayer.Character
+        H._visFilter[2] = Camera
+        H._visParams.FilterDescendantsInstances = H._visFilter
+        local result = workspace:Raycast(origin, dir, H._visParams)
         if result then return result.Instance:IsDescendantOf(part.Parent) end
         return true
     end
 
+    H._ZERO2 = Vector2.new(0, 0)
+
     function H.WorldToScreen(pos)
-        if not Camera then return Vector2.new(0, 0), false end
-        local ok, v2, onScreen = pcall(function() return Camera:WorldToViewportPoint(pos) end)
-        if not ok or not v2 then return Vector2.new(0, 0), false end
-        if not H.IsFinite(v2.X) or not H.IsFinite(v2.Y) or not H.IsFinite(v2.Z) then
-            return Vector2.new(0, 0), false
-        end
-        return Vector2.new(v2.X, v2.Y), (onScreen and v2.Z > 0)
+        local cam = Camera
+        if not cam then return H._ZERO2, false end
+        local v2 = cam:WorldToViewportPoint(pos)
+        local x, y, z = v2.X, v2.Y, v2.Z
+        if x ~= x or y ~= y or z ~= z then return H._ZERO2, false end
+        return Vector2.new(x, y), z > 0
     end
 
     function H.GetMousePos() return UserInputService:GetMouseLocation() end
@@ -424,8 +459,15 @@ do
         Enum.HumanoidStateType.FallingDown,
     }
 
+    H._orbitTargets = {}
+    H._orbitTargetsT = 0
+
     function H.OrbitGetTargets()
-        local list = {}
+        local now = tick()
+        if now - H._orbitTargetsT < 0.1 then return H._orbitTargets end
+        H._orbitTargetsT = now
+        local list = H._orbitTargets
+        table.clear(list)
         for i = 1, 3 do
             local v = H.Flags["OrbitTarget" .. i]
             if v then
@@ -706,7 +748,7 @@ do
             local closest, best = nil, math.huge
             local mouse = H.GetMousePos()
             local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-            for _, plr in ipairs(Players:GetPlayers()) do
+            for _, plr in ipairs(H._snap) do
                 if plr ~= LocalPlayer and PassesChecks(plr) then
                     local part = H.GetTargetPart(plr, H.Flags.AimbotHitPart or "Head")
                     if part then
@@ -793,16 +835,30 @@ do
         H.FOVCircle.Visible = false
     end
 
+    H._fovState = nil
+
     function H.UpdateFOVCircle()
         if not H.FOVCircle then return end
         if H.Flags.AimbotShowFOV and H.Flags.AimbotEnabled then
-            H.FOVCircle.Visible = true
-            H.FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-            H.FOVCircle.Radius = H.Flags.AimbotFOV or 120
-            H.FOVCircle.Color = H.NormalizeColor(H.Flags.AimbotFOVColor, Color3.new(1, 1, 1))
-            H.FOVCircle.Transparency = 1
-            H.FOVCircle.Thickness = 2
-        else
+            local vs = Camera.ViewportSize
+            local px, py = vs.X / 2, vs.Y / 2
+            local r = H.Flags.AimbotFOV or 120
+            local c = H.NormalizeColor(H.Flags.AimbotFOVColor, Color3.new(1, 1, 1))
+            local st = H._fovState
+            if not st then
+                st = {}
+                H._fovState = st
+                H.FOVCircle.Transparency = 1
+                H.FOVCircle.Thickness = 2
+            end
+            if not H.FOVCircle.Visible then H.FOVCircle.Visible = true end
+            if st.px ~= px or st.py ~= py then
+                st.px, st.py = px, py
+                H.FOVCircle.Position = Vector2.new(px, py)
+            end
+            if st.r ~= r then st.r = r H.FOVCircle.Radius = r end
+            if st.c ~= c then st.c = c H.FOVCircle.Color = c end
+        elseif H.FOVCircle.Visible then
             H.FOVCircle.Visible = false
         end
     end
@@ -819,16 +875,30 @@ do
         H.SilentFOVCircle.Visible = false
     end
 
+    H._sfovState = nil
+
     function H.UpdateSilentFOVCircle()
         if not H.SilentFOVCircle then return end
         if H.Flags.SilentAimShowFOV and H.Flags.SilentAimEnabled then
-            H.SilentFOVCircle.Visible = true
-            H.SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-            H.SilentFOVCircle.Radius = H.Flags.SilentAimFOV or 150
-            H.SilentFOVCircle.Color = H.NormalizeColor(H.Flags.SilentAimFOVColor, Color3.fromRGB(120, 180, 255))
-            H.SilentFOVCircle.Transparency = 1
-            H.SilentFOVCircle.Thickness = 2
-        else
+            local vs = Camera.ViewportSize
+            local px, py = vs.X / 2, vs.Y / 2
+            local r = H.Flags.SilentAimFOV or 150
+            local c = H.NormalizeColor(H.Flags.SilentAimFOVColor, Color3.fromRGB(120, 180, 255))
+            local st = H._sfovState
+            if not st then
+                st = {}
+                H._sfovState = st
+                H.SilentFOVCircle.Transparency = 1
+                H.SilentFOVCircle.Thickness = 2
+            end
+            if not H.SilentFOVCircle.Visible then H.SilentFOVCircle.Visible = true end
+            if st.px ~= px or st.py ~= py then
+                st.px, st.py = px, py
+                H.SilentFOVCircle.Position = Vector2.new(px, py)
+            end
+            if st.r ~= r then st.r = r H.SilentFOVCircle.Radius = r end
+            if st.c ~= c then st.c = c H.SilentFOVCircle.Color = c end
+        elseif H.SilentFOVCircle.Visible then
             H.SilentFOVCircle.Visible = false
         end
     end
@@ -845,7 +915,7 @@ do
         end
         local camPos = Camera.CFrame.Position
         local bestPart, bestScreen = nil, (H.Flags.SilentAimFOV or 150)
-        for _, plr in ipairs(Players:GetPlayers()) do
+        for _, plr in ipairs(H._snap) do
             if plr ~= LocalPlayer then
                 local c = plr.Character
                 if c then
@@ -1270,31 +1340,35 @@ do
     function H.HideAllTracerLines(plr)
         local tr = H.TracerObjects[plr]
         if tr and tr.lines then
-            for _, l in ipairs(tr.lines) do l.Visible = false end
+            local used = tr.used or 0
+            for i = 1, used do tr.lines[i].Visible = false end
+            tr.used = 0
         end
+    end
+
+    local function ArcPerp(d)
+        local len = d.Magnitude
+        if len < 0.001 then return Vector2.new(1, 0) end
+        return Vector2.new(-d.Y / len, d.X / len)
+    end
+
+    local function ArcBez(p0, p1, p2, t)
+        local u = 1 - t
+        return u * u * p0 + 2 * u * t * p1 + t * t * p2
     end
 
     function H.DrawArcBezier(tracer, origin, targetPos, color)
         local dir = targetPos - origin
         local dist = dir.Magnitude
-        if dist < 2 then return end
+        if dist < 2 then return 0 end
 
         local ARC    = CFG.ARC_DROP
         local SPREAD = CFG.ARC_SPREAD
         local SEGS   = CFG.ARC_SEGS
         local STR    = CFG.ARC_STRANDS
 
-        local function perp(d)
-            local len = d.Magnitude
-            if len < 0.001 then return Vector2.new(1, 0) end
-            return Vector2.new(-d.Y / len, d.X / len)
-        end
-        local function bezier(p0, p1, p2, t)
-            local u = 1 - t
-            return u * u * p0 + 2 * u * t * p1 + t * t * p2
-        end
-
-        local n = perp(dir)
+        local lines = tracer.lines
+        local n = ArcPerp(dir)
         local mid = origin:Lerp(targetPos, 0.45)
         local drop = dist * ARC
         local ctrl = mid
@@ -1310,28 +1384,26 @@ do
             local p1 = ctrl + off * 0.6
             local p2 = targetPos
             for i = 1, SEGS do
-                local t0 = (i - 1) / SEGS
-                local t1 = i / SEGS
-                local a = bezier(p0, p1, p2, t0)
-                local b = bezier(p0, p1, p2, t1)
-                local line = tracer.lines[idx]
-                if line then
-                    line.From = a
-                    line.To = b
-                    line.Color = color
-                    line.Thickness = 1.4
-                    line.Visible = true
-                end
+                local line = lines[idx]
+                if not line then return idx - 1 end
+                line.From = ArcBez(p0, p1, p2, (i - 1) / SEGS)
+                line.To   = ArcBez(p0, p1, p2, i / SEGS)
+                line.Color = color
+                line.Thickness = 1.4
+                line.Visible = true
                 idx = idx + 1
-                if idx > #tracer.lines then return end
             end
         end
+        return idx - 1
     end
 
     function H.UpdateTracers(plr, screenPos)
         local tracer = H.TracerObjects[plr]
         if not tracer or not tracer.lines then return end
-        for _, l in ipairs(tracer.lines) do l.Visible = false end
+        local lines = tracer.lines
+        local used = tracer.used or 0
+        for i = 1, used do lines[i].Visible = false end
+        tracer.used = 0
         local tType = H.Flags.ESPTracerType or "Off"
         if tType == "Off" then return end
         if H.Flags.Optimize then return end
@@ -1346,16 +1418,17 @@ do
         local color = H.ESPColor(plr, "ESPTracerColor", Color3.new(1, 1, 1))
 
         if tType == "Straight" then
-            local l = tracer.lines[1]
+            local l = lines[1]
             if l then
                 l.From = origin
                 l.To = screenPos
                 l.Color = color
                 l.Thickness = 1
                 l.Visible = true
+                tracer.used = 1
             end
         elseif tType == "Arc" then
-            H.DrawArcBezier(tracer, origin, screenPos, color)
+            tracer.used = H.DrawArcBezier(tracer, origin, screenPos, color)
         end
     end
 
@@ -1382,15 +1455,17 @@ do
             if not plr.Parent then H.ESPNeedsRebuild = true break end
             if not plr.Character or not H.IsAlive(plr) then H.ESPNeedsRebuild = true break end
             if obj.box then
-                local ok = pcall(function()
-                    local _ = obj.box.Visible
-                    obj.box.Visible = obj.box.Visible
-                end)
+                local ok = pcall(H._espAlive, obj.box)
                 if not ok then H.ESPNeedsRebuild = true break end
             end
         end
         if H.ESPNeedsRebuild then task.spawn(H.ResetESP) end
     end
+
+    H.SIGNS = { -1, 1 }
+    H.BOX_EDGES = { {1,2},{3,4},{5,6},{7,8},{1,3},{2,4},{5,7},{6,8},{1,5},{2,6},{3,7},{4,8} }
+    H._boxPts = {}
+    H._espAlive = function(box) box.Visible = box.Visible end
 
     function H.UpdateESP()
         if not H.Flags.ESPEnabled then
@@ -1399,16 +1474,20 @@ do
             end
             return
         end
-        local snapshot = {}
-        local present = {}
-        for _, plr in ipairs(Players:GetPlayers()) do table.insert(snapshot, plr) present[plr] = true end
+        local snapshot = H._snap
+        local present = H._present
+        table.clear(present)
+        for i = 1, #snapshot do present[snapshot[i]] = true end
         for plr in pairs(H.ESPObjects) do
             if not present[plr] then H.RemoveESP(plr) end
         end
-        for plr in pairs(H.TracerObjects) do
-            if not present[plr] then H.RemoveESP(plr) end
+        if next(H.TracerObjects) then
+            for plr in pairs(H.TracerObjects) do
+                if not present[plr] then H.RemoveESP(plr) end
+            end
         end
-        for _, plr in ipairs(snapshot) do
+        for si = 1, #snapshot do
+            local plr = snapshot[si]
             if plr ~= LocalPlayer then
                 if not plr.Parent then
                     H.RemoveESP(plr)
@@ -1459,13 +1538,26 @@ do
                                     local maxHp = math.max(hum.MaxHealth, 1)
                                     local pct = math.clamp(hp / maxHp, 0, 1)
 
-                                    if H.Flags.ESPBoxType == "3D" then
+                                    local want3D = H.Flags.ESPBoxType == "3D"
+                                    local want2D = H.Flags.ESPBoxType == "2D"
+                                    local pts3D, allOn3D
+                                    if want3D then
                                         local cf = hrp.CFrame
+                                        pts3D = H._boxPts
+                                        allOn3D = true
                                         local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
-                                        for _, sx in ipairs({-1, 1}) do
-                                            for _, sy in ipairs({-1, 1}) do
-                                                for _, sz in ipairs({-1, 1}) do
-                                                    local sp = H.WorldToScreen((cf * CFrame.new(sx * 2, sy * 2.75 - 0.25, sz * 1)).Position)
+                                        local SIGNS = H.SIGNS
+                                        local idx = 1
+                                        for a = 1, 2 do
+                                            local sx = SIGNS[a]
+                                            for b = 1, 2 do
+                                                local sy = SIGNS[b]
+                                                for c = 1, 2 do
+                                                    local sz = SIGNS[c]
+                                                    local sp, on = H.WorldToScreen((cf * CFrame.new(sx * 2, sy * 2.75 - 0.25, sz * 1)).Position)
+                                                    pts3D[idx] = sp
+                                                    idx += 1
+                                                    if not on then allOn3D = false end
                                                     if sp.X < minX then minX = sp.X end
                                                     if sp.X > maxX then maxX = sp.X end
                                                     if sp.Y < minY then minY = sp.Y end
@@ -1482,74 +1574,74 @@ do
                                             pos = Vector2.new(cx, pos.Y)
                                         end
                                     end
+
                                     if H.HAS_DRAWING and obj.box then
-                                        if H.Flags.ESPBoxType == "2D" and H.IsFinite(boxH) and boxH > 0 and boxH < 5000 then
+                                        if want2D and H.IsFinite(boxH) and boxH > 0 and boxH < 5000 then
+                                            local col = H.ESPColor(plr, "ESPBoxColor", Color3.fromRGB(255, 255, 255))
                                             obj.box.Size = Vector2.new(boxW, boxH)
                                             obj.box.Position = Vector2.new(topPos.X - boxW / 2, boxTopY)
-                                            obj.box.Color = H.ESPColor(plr, "ESPBoxColor", Color3.fromRGB(255, 255, 255))
+                                            if obj._boxCol ~= col then obj._boxCol = col obj.box.Color = col end
                                             obj.box.Visible = true
                                             if obj.boxGlow then
-                                                for _, g in ipairs(obj.boxGlow) do
-                                                    if H.Flags.ESPGlowingBoxes and not H.Flags.Optimize then
+                                                if H.Flags.ESPGlowingBoxes and not H.Flags.Optimize then
+                                                    for _, g in ipairs(obj.boxGlow) do
                                                         g.Size = obj.box.Size
                                                         g.Position = obj.box.Position
-                                                        g.Color = obj.box.Color
+                                                        g.Color = col
                                                         g.Visible = true
-                                                    else
-                                                        g.Visible = false
                                                     end
+                                                    obj._glowOn = true
+                                                elseif obj._glowOn then
+                                                    for _, g in ipairs(obj.boxGlow) do g.Visible = false end
+                                                    obj._glowOn = false
                                                 end
                                             end
                                         else
-                                            obj.box.Visible = false
-                                            if obj.boxGlow then for _, g in ipairs(obj.boxGlow) do g.Visible = false end end
+                                            if obj.box.Visible then obj.box.Visible = false end
+                                            if obj.boxGlow and obj._glowOn then
+                                                for _, g in ipairs(obj.boxGlow) do g.Visible = false end
+                                                obj._glowOn = false
+                                            end
                                         end
                                     end
 
                                     if obj.box3d then
                                         local ok3 = false
-                                        if H.Flags.ESPBoxType == "3D" then
-                                            local cf = hrp.CFrame
-                                            local hx, hy, hz = 2, 2.75, 1
-                                            local pts, allOn = {}, true
-                                            local idx = 1
-                                            for _, sx in ipairs({-1, 1}) do
-                                                for _, sy in ipairs({-1, 1}) do
-                                                    for _, sz in ipairs({-1, 1}) do
-                                                        local sp, on = H.WorldToScreen((cf * CFrame.new(sx * hx, sy * hy - 0.25, sz * hz)).Position)
-                                                        pts[idx] = sp
-                                                        if not on then allOn = false end
-                                                        idx += 1
+                                        if want3D and allOn3D then
+                                            local col = H.ESPColor(plr, "ESPBoxColor", Color3.fromRGB(255, 255, 255))
+                                            local edges = H.BOX_EDGES
+                                            local glowOn = H.Flags.ESPGlowingBoxes and not H.Flags.Optimize
+                                            for i = 1, 12 do
+                                                local e = edges[i]
+                                                local l = obj.box3d[i]
+                                                l.From = pts3D[e[1]]
+                                                l.To = pts3D[e[2]]
+                                                l.Color = col
+                                                l.Visible = true
+                                                local g = obj.box3dGlow and obj.box3dGlow[i]
+                                                if g then
+                                                    if glowOn then
+                                                        g.From = l.From
+                                                        g.To = l.To
+                                                        g.Color = col
+                                                        g.Visible = true
+                                                    elseif obj._glow3dOn then
+                                                        g.Visible = false
                                                     end
                                                 end
                                             end
-                                            if allOn then
-                                                local col = H.ESPColor(plr, "ESPBoxColor", Color3.fromRGB(255, 255, 255))
-                                                local edges = {{1,2},{3,4},{5,6},{7,8},{1,3},{2,4},{5,7},{6,8},{1,5},{2,6},{3,7},{4,8}}
-                                                for i, e in ipairs(edges) do
-                                                    local l = obj.box3d[i]
-                                                    l.From = pts[e[1]]
-                                                    l.To = pts[e[2]]
-                                                    l.Color = col
-                                                    l.Visible = true
-                                                    local g = obj.box3dGlow and obj.box3dGlow[i]
-                                                    if g then
-                                                        if H.Flags.ESPGlowingBoxes and not H.Flags.Optimize then
-                                                            g.From = l.From
-                                                            g.To = l.To
-                                                            g.Color = col
-                                                            g.Visible = true
-                                                        else
-                                                            g.Visible = false
-                                                        end
-                                                    end
-                                                end
-                                                ok3 = true
-                                            end
+                                            obj._glow3dOn = glowOn
+                                            ok3 = true
                                         end
                                         if not ok3 then
-                                            for _, l in ipairs(obj.box3d) do l.Visible = false end
-                                            if obj.box3dGlow then for _, g in ipairs(obj.box3dGlow) do g.Visible = false end end
+                                            if obj._box3dOn then
+                                                for _, l in ipairs(obj.box3d) do l.Visible = false end
+                                                if obj.box3dGlow then for _, g in ipairs(obj.box3dGlow) do g.Visible = false end end
+                                                obj._glow3dOn = false
+                                            end
+                                            obj._box3dOn = false
+                                        else
+                                            obj._box3dOn = true
                                         end
                                     end
 
@@ -1557,12 +1649,19 @@ do
                                         if H.Flags.ESPName and H.HAS_DRAWING then
                                             local nameType = H.Flags.ESPNameType
                                             if type(nameType) == "table" then nameType = nameType[1] end
-                                            obj.name.Text = (nameType == "Display") and plr.DisplayName or plr.Name
-                                            obj.name.Color = H.ESPColor(plr, "ESPNameColor", Color3.new(1, 1, 1))
-                                            obj.name.Size = H.GetScaledTextSize(16, 12, boxH)
-                                            obj.name.Position = Vector2.new(pos.X, boxTopY - 18)
-                                            obj.name.Visible = true
-                                        else
+                                            local txt = (nameType == "Display") and plr.DisplayName or plr.Name
+                                            if obj._nameTxt ~= txt then obj._nameTxt = txt obj.name.Text = txt end
+                                            local nc = H.ESPColor(plr, "ESPNameColor", Color3.new(1, 1, 1))
+                                            if obj._nameCol ~= nc then obj._nameCol = nc obj.name.Color = nc end
+                                            local nsz = H.GetScaledTextSize(16, 12, boxH)
+                                            if obj._nameSize ~= nsz then obj._nameSize = nsz obj.name.Size = nsz end
+                                            local nx, ny = pos.X, boxTopY - 18
+                                            if obj._namePX ~= nx or obj._namePY ~= ny then
+                                                obj._namePX, obj._namePY = nx, ny
+                                                obj.name.Position = Vector2.new(nx, ny)
+                                            end
+                                            if not obj.name.Visible then obj.name.Visible = true end
+                                        elseif obj.name.Visible then
                                             obj.name.Visible = false
                                         end
                                     end
@@ -1593,12 +1692,22 @@ do
 
                                     if obj.distance then
                                         if H.Flags.ESPDistance and H.HAS_DRAWING then
-                                            obj.distance.Text = string.format("[%d]", math.floor(dist))
-                                            obj.distance.Color = H.ESPColor(plr, "ESPDistanceColor", Color3.new(1, 1, 1))
-                                            obj.distance.Size = H.GetScaledTextSize(14, 12, boxH)
-                                            obj.distance.Position = Vector2.new(pos.X, boxTopY + boxH + 2)
-                                            obj.distance.Visible = true
-                                        else
+                                            local di = math.floor(dist)
+                                            if obj._distTxt ~= di then
+                                                obj._distTxt = di
+                                                obj.distance.Text = "[" .. di .. "]"
+                                            end
+                                            local dc = H.ESPColor(plr, "ESPDistanceColor", Color3.new(1, 1, 1))
+                                            if obj._distCol ~= dc then obj._distCol = dc obj.distance.Color = dc end
+                                            local dsz = H.GetScaledTextSize(14, 12, boxH)
+                                            if obj._distSize ~= dsz then obj._distSize = dsz obj.distance.Size = dsz end
+                                            local dx, dy = pos.X, boxTopY + boxH + 2
+                                            if obj._distPX ~= dx or obj._distPY ~= dy then
+                                                obj._distPX, obj._distPY = dx, dy
+                                                obj.distance.Position = Vector2.new(dx, dy)
+                                            end
+                                            if not obj.distance.Visible then obj.distance.Visible = true end
+                                        elseif obj.distance.Visible then
                                             obj.distance.Visible = false
                                         end
                                     end
@@ -1607,15 +1716,24 @@ do
                                         if H.Flags.ESPTool and H.HAS_DRAWING then
                                             local tool = char:FindFirstChildOfClass("Tool")
                                             if tool then
-                                                obj.toolTxt.Text = tool.Name
-                                                obj.toolTxt.Color = H.ESPColor(plr, "ESPToolColor", Color3.fromRGB(0, 255, 0))
-                                                obj.toolTxt.Size = H.GetScaledTextSize(14, 12, boxH)
-                                                obj.toolTxt.Position = Vector2.new(pos.X, boxTopY + boxH + 2 + (H.Flags.ESPDistance and 16 or 0))
-                                                obj.toolTxt.Visible = true
-                                            else
+                                                if obj._toolTxt ~= tool.Name then
+                                                    obj._toolTxt = tool.Name
+                                                    obj.toolTxt.Text = tool.Name
+                                                end
+                                                local tc = H.ESPColor(plr, "ESPToolColor", Color3.fromRGB(0, 255, 0))
+                                                if obj._toolCol ~= tc then obj._toolCol = tc obj.toolTxt.Color = tc end
+                                                local tsz = H.GetScaledTextSize(14, 12, boxH)
+                                                if obj._toolSize ~= tsz then obj._toolSize = tsz obj.toolTxt.Size = tsz end
+                                                local tx, ty = pos.X, boxTopY + boxH + 2 + (H.Flags.ESPDistance and 16 or 0)
+                                                if obj._toolPX ~= tx or obj._toolPY ~= ty then
+                                                    obj._toolPX, obj._toolPY = tx, ty
+                                                    obj.toolTxt.Position = Vector2.new(tx, ty)
+                                                end
+                                                if not obj.toolTxt.Visible then obj.toolTxt.Visible = true end
+                                            elseif obj.toolTxt.Visible then
                                                 obj.toolTxt.Visible = false
                                             end
-                                        else
+                                        elseif obj.toolTxt.Visible then
                                             obj.toolTxt.Visible = false
                                         end
                                     end
@@ -1623,18 +1741,23 @@ do
                                     if obj.highlight then
                                         if H.Flags.ESPGlow and not H.Flags.Optimize then
                                             local c = H.ESPColor(plr, "ESPGlowColor", Color3.fromRGB(255, 255, 255))
-                                            obj.highlight.FillColor = c
-                                            obj.highlight.FillTransparency = 0.5
-                                            obj.highlight.OutlineColor = c
-                                            obj.highlight.OutlineTransparency = 0
-                                        else
+                                            if obj._hlCol ~= c then
+                                                obj._hlCol = c
+                                                obj.highlight.FillColor = c
+                                                obj.highlight.OutlineColor = c
+                                            end
+                                            if obj.highlight.FillTransparency ~= 0.5 then obj.highlight.FillTransparency = 0.5 end
+                                            if obj.highlight.OutlineTransparency ~= 0 then obj.highlight.OutlineTransparency = 0 end
+                                            obj._hlOn = true
+                                        elseif obj._hlOn then
                                             obj.highlight.FillTransparency = 1
                                             obj.highlight.OutlineTransparency = 1
+                                            obj._hlOn = false
                                         end
                                     end
 
                                     if obj.billboard then
-                                        obj.billboard.Enabled = true
+                                        if not obj.billboard.Enabled then obj.billboard.Enabled = true end
                                         if obj.nameLbl then
                                             if H.Flags.ESPName and not H.HAS_DRAWING then
                                                 local nameType = H.Flags.ESPNameType
@@ -1847,7 +1970,7 @@ do
 
     function H.VoidLoopPickPlayers()
         local list = {}
-        for _, p in ipairs(H.Players:GetPlayers()) do
+        for _, p in ipairs(H._snap) do
             if p ~= LocalPlayer then
                 local c = p.Character
                 if c then
@@ -2066,14 +2189,30 @@ do
         end)
     end
 
+    H._noclipCacheConn = nil
+
     function H.ApplyNoclip()
         if H.NoclipConn then H.NoclipConn:Disconnect() H.NoclipConn = nil end
+        if H._noclipCacheConn then H._noclipCacheConn:Disconnect() H._noclipCacheConn = nil end
         if not H.Flags.Noclip then return end
+        local cache, cacheChar = nil, nil
         H.NoclipConn = RunService.Stepped:Connect(function()
             local char = LocalPlayer.Character
             if char then
-                for _, p in ipairs(char:GetDescendants()) do
-                    if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+                if cacheChar ~= char then
+                    if H._noclipCacheConn then H._noclipCacheConn:Disconnect() H._noclipCacheConn = nil end
+                    cacheChar = char
+                    cache = {}
+                    for _, p in ipairs(char:GetDescendants()) do
+                        if p:IsA("BasePart") then cache[#cache + 1] = p end
+                    end
+                    H._noclipCacheConn = char.DescendantAdded:Connect(function(d)
+                        if d:IsA("BasePart") and cache then cache[#cache + 1] = d end
+                    end)
+                end
+                for i = 1, #cache do
+                    local p = cache[i]
+                    if p.Parent and p.CanCollide then p.CanCollide = false end
                 end
             end
         end)
@@ -2092,6 +2231,25 @@ do
    
     H.AntiFlingCollideConn = nil
     H.AntiFlingFlipped = setmetatable({}, { __mode = "k" })
+    H._afParts = setmetatable({}, { __mode = "k" })
+
+    local function afParts(char)
+        local c = H._afParts[char]
+        if not c then
+            c = {}
+            for _, p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then c[#c + 1] = p end
+            end
+            H._afParts[char] = c
+            char.DescendantAdded:Connect(function(d)
+                if d:IsA("BasePart") then
+                    local t = H._afParts[char]
+                    if t then t[#t + 1] = d end
+                end
+            end)
+        end
+        return c
+    end
 
     function H.ApplyAntiFlingCollide(on)
         if H.AntiFlingCollideConn then
@@ -2109,12 +2267,16 @@ do
 
         H.AntiFlingCollideConn = H.RunService.Stepped:Connect(function()
             if not H.Flags.AntiFlingCollide then return end
-            for _, plr in ipairs(H.Players:GetPlayers()) do
+            local snap = H._snap
+            for i = 1, #snap do
+                local plr = snap[i]
                 if plr ~= H.LocalPlayer then
                     local char = plr.Character
                     if char then
-                        for _, p in ipairs(char:GetDescendants()) do
-                            if p:IsA("BasePart") and p.CanCollide then
+                        local parts = afParts(char)
+                        for j = 1, #parts do
+                            local p = parts[j]
+                            if p.Parent and p.CanCollide then
                                 p.CanCollide = false
                                 H.AntiFlingFlipped[p] = true
                             end
@@ -2131,7 +2293,7 @@ do
     end
 
     function H.RestoreHitboxes()
-        for _, plr in ipairs(H.Players:GetPlayers()) do
+        for _, plr in ipairs(H._snap) do
             if plr ~= LocalPlayer then
                 local char = plr.Character
                 if char then
@@ -2161,17 +2323,16 @@ do
             else trans = rawTrans end
             if trans < 0 then trans = 0 end
             if trans > 1 then trans = 1 end
-            for _, plr in ipairs(H.Players:GetPlayers()) do
+            local newSize = Vector3.new(size, size, size)
+            for _, plr in ipairs(H._snap) do
                 if plr ~= LocalPlayer then
                     local char = plr.Character
                     if char then
                         local hrp = char:FindFirstChild("HumanoidRootPart")
                         if hrp then
-                            pcall(function()
-                                hrp.Size = Vector3.new(size, size, size)
-                                hrp.Transparency = trans
-                                hrp.CanCollide = false
-                            end)
+                            if hrp.Size ~= newSize then hrp.Size = newSize end
+                            if hrp.Transparency ~= trans then hrp.Transparency = trans end
+                            if hrp.CanCollide then hrp.CanCollide = false end
                         end
                     end
                 end
@@ -2374,15 +2535,16 @@ do
         H.Watermark.Visible = false
     end
 
+    H._frames = 0
+    H._fps = 60
+
     function H.UpdateWatermark()
         if not H.Watermark then return end
         if not H.Flags.Watermark then H.Watermark.Visible = false return end
         H.Watermark.Visible = true
-        local fps = 60
-        pcall(function() fps = math.floor(1 / RunService.RenderStepped:Wait()) end)
         local ping = 0
         pcall(function() ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()) end)
-        H.Watermark.Text = string.format("houhou | %d fps | %d ms", fps, ping)
+        H.Watermark.Text = string.format("houhou | %d fps | %d ms", H._fps, ping)
     end
 
     function H.findMainRemote()
@@ -2410,7 +2572,7 @@ do
     function H.DoAutoStomp()
         if not H.Flags.AutoStomp or not H.MainRemote then return end
         local now = tick()
-        for _, plr in ipairs(H.Players:GetPlayers()) do
+        for _, plr in ipairs(H._snap) do
             if plr ~= LocalPlayer and not H.WLIgnore(plr) then
                 local char = plr.Character
                 if not char then
@@ -2522,9 +2684,11 @@ do
         H.RapidFireDone = {}
     end
 
+    H._rfDirty = true
+
     function H.UpdateRapidFire()
         if not H.Flags.RapidFire then return end
-        H.ScanRapidFireTools()
+        if H._rfDirty then H._rfDirty = false H.ScanRapidFireTools() end
         if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then return end
         if tick() - H.RapidFireLast < 0.015 then return end
         local tool = H.GetEquippedWeapon()
@@ -2780,22 +2944,29 @@ do
         return nil
     end
 
+    H._hitboxCache = setmetatable({}, { __mode = "k" })
+
     function H.RageGetHitbox(plr)
         local char = plr and plr.Character
         if not char then return nil end
+        local e = H._hitboxCache[char]
+        local now = tick()
+        if e and now - e.t < 0.5 and e.hb.Parent then return e.hb end
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then return nil end
         local rootAtt = hrp:FindFirstChild("RootAttachment")
-        if rootAtt then
-            local hb = rootAtt:FindFirstChild("Hitbox")
-            if hb then return hb end
-        end
-        for _, d in ipairs(char:GetDescendants()) do
-            if d.Name == "Hitbox" and (d:IsA("BasePart") or d:IsA("Attachment")) then
-                return d
+        local hb
+        if rootAtt then hb = rootAtt:FindFirstChild("Hitbox") end
+        if not hb then
+            for _, d in ipairs(char:GetDescendants()) do
+                if d.Name == "Hitbox" and (d:IsA("BasePart") or d:IsA("Attachment")) then
+                    hb = d break
+                end
             end
         end
-        return hrp:FindFirstChild("RootAttachment") or char:FindFirstChild("Head") or hrp
+        hb = hb or hrp:FindFirstChild("RootAttachment") or char:FindFirstChild("Head") or hrp
+        H._hitboxCache[char] = { hb = hb, t = now }
+        return hb
     end
 
     function H.RageGetAimPosition(hitbox)
@@ -2805,16 +2976,27 @@ do
         return nil
     end
 
+    H._shotgunCache = setmetatable({}, { __mode = "k" })
+
     function H.RageIsShotgun(tool)
         if not tool then return false end
-        local n = tool.Name:lower()
-        return n:find("shotgun") or n:find("double") or n:find("tactical")
-            or n:find("barrel") or n:find("sg") or n:find("db")
-            or tool:FindFirstChild("GunClientShotgun") ~= nil
+        local c = H._shotgunCache[tool]
+        if c == nil then
+            local n = tool.Name:lower()
+            c = (n:find("shotgun") or n:find("double") or n:find("tactical")
+                or n:find("barrel") or n:find("sg") or n:find("db")) and true or false
+            H._shotgunCache[tool] = c
+        end
+        if c then return true end
+        return tool:FindFirstChild("GunClientShotgun") ~= nil
     end
+
+    H._statCache = setmetatable({}, { __mode = "k" })
 
     function H.RageGetWeaponStats(gun)
         if not gun then return {range = 250, damage = 34.8} end
+        local cached = H._statCache[gun]
+        if cached then return cached end
         local r, d
         r = gun:GetAttribute("Range") or gun:GetAttribute("MaxRange") or gun:GetAttribute("MaxDistance")
         d = gun:GetAttribute("Damage") or gun:GetAttribute("BaseDamage")
@@ -2833,7 +3015,8 @@ do
             elseif n:find("shotgun") or n:find("sg") then r, d = 95, 28.6
             else r, d = 250, 34.8 end
         end
-        return {range = r, damage = d}
+        H._statCache[gun] = {range = r, damage = d}
+        return H._statCache[gun]
     end
 
     function H.RageBuildPellet(origin, centerAim, hitbox, dir)
@@ -2882,8 +3065,8 @@ do
         local ammo = tool:FindFirstChild("Ammo")
         local cap = tool:FindFirstChild("MaxAmmo") or tool:FindFirstChild("MaxAmmoValue") or tool:FindFirstChild("Clip") or tool:FindFirstChild("MagSize") or tool:FindFirstChild("AmmoCapacity")
         local maxValue = cap and tonumber(cap.Value) or (ammo and tonumber(ammo.Value)) or 0
-        if ammo and maxValue > 0 then
-            pcall(function() ammo.Value = maxValue end)
+        if ammo and maxValue > 0 and ammo.Value ~= maxValue then
+            ammo.Value = maxValue
         end
         if H.MainRemote then
             local names = { "Reload", "ReloadGun", "ReloadWeapon", "ReloadAmmo", "RequestReload", "ReloadMagazine" }
@@ -3195,7 +3378,7 @@ do
         local now = tick()
         if now - H.RageLastStompAll < 0.4 then return end
         H.RageLastStompAll = now
-        for _, plr in ipairs(Players:GetPlayers()) do
+        for _, plr in ipairs(H._snap) do
             if plr ~= LocalPlayer and not H.WLIgnore(plr) then
                 if H.IsKO(plr) then
                     pcall(function()
@@ -3240,10 +3423,18 @@ do
         return false
     end
 
+    H._sentryNameCache = {}
+
     function H.IsSentryGun(name)
-        if H.SentryBlocked(name) then return false end
-        local n = string.lower(name or "")
-        return n:find("revolver") or n:find("shotgun") or n:find("double") or n:find("tactical") or n:find("[", 1, true)
+        local c = H._sentryNameCache[name]
+        if c ~= nil then return c end
+        local v = false
+        if not H.SentryBlocked(name) then
+            local n = string.lower(name or "")
+            v = (n:find("revolver") or n:find("shotgun") or n:find("double") or n:find("tactical") or n:find("[", 1, true)) and true or false
+        end
+        H._sentryNameCache[name] = v
+        return v
     end
 
     function H.SentryGunPriority(tool)
@@ -3254,7 +3445,11 @@ do
         return 100
     end
 
+    H._sentryGuns = nil
+    function H.InvalidateSentryGuns() H._sentryGuns = nil end
+
     function H.ListSentryGuns()
+        if H._sentryGuns then return H._sentryGuns end
         local guns = {}
         local function scan(parent)
             if not parent then return end
@@ -3267,6 +3462,7 @@ do
         scan(LocalPlayer.Character)
         scan(LocalPlayer:FindFirstChild("Backpack"))
         table.sort(guns, function(a, b) return H.SentryGunPriority(a) < H.SentryGunPriority(b) end)
+        H._sentryGuns = guns
         return guns
     end
 
@@ -3338,9 +3534,13 @@ do
         local myChar = LocalPlayer.Character
         local now = tick()
         local best, bestScore = nil, 2.5
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        for _, plr in ipairs(Players:GetPlayers()) do
+        local params = H._atkParams
+        if not params then
+            params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            H._atkParams = params
+        end
+        for _, plr in ipairs(H._snap) do
             local c = plr ~= LocalPlayer and not H.WLIgnore(plr) and plr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             local head = c and c:FindFirstChild("Head")
@@ -3730,7 +3930,7 @@ do
             local myHRP = Services_LocalPlayer.Character and Services_LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
             if not myHRP then return nil end
             local best, bestDist = nil, math.huge
-            for _, plr in ipairs(Services.Players:GetPlayers()) do
+            for _, plr in ipairs(H._snap) do
                 if plr ~= Services_LocalPlayer and plr.Parent then
                     if isAlive(plr) and isFullyLoaded(plr)
                        and not isKnocked(plr) and not isGrabbed(plr)
@@ -5068,6 +5268,24 @@ do
             try(function() if o.TextureID ~= nil then part.TextureID = o.TextureID end end)
             try(function() if o.SA then for _, sa in ipairs(o.SA) do sa.Parent = part end end end)
         end
+        local chamsParts = {}
+        local chamsChar = nil
+        local chamsConn = nil
+        local function chamsList(char)
+            if chamsChar == char then return chamsParts end
+            if chamsConn then chamsConn:Disconnect() chamsConn = nil end
+            chamsChar = char
+            local n = 0
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then n += 1 chamsParts[n] = part end
+            end
+            for i = n + 1, #chamsParts do chamsParts[i] = nil end
+            chamsConn = char.DescendantAdded:Connect(function(d)
+                if d:IsA("BasePart") then chamsParts[#chamsParts + 1] = d end
+            end)
+            return chamsParts
+        end
+
         local function restoreChams()
             for part, o in pairs(chamsOriginals) do
                 if part.Parent then restorePart(part, o) end
@@ -5091,8 +5309,10 @@ do
                     end
                 end
             end
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and not chamsSkip[part]
+            local list = chamsList(char)
+            for li = 1, #list do
+                local part = list[li]
+                if part.Parent and part.Name ~= "HumanoidRootPart" and not chamsSkip[part]
                     and (not gunOnly or (tool and part:IsDescendantOf(tool))) then
                     if not chamsOriginals[part] then
                         if part.Transparency >= 0.95 then
@@ -5377,11 +5597,9 @@ do
             if not hum then return end
             local p = H_.Flags.JumpPowerValue
             local h = p * p / (2 * workspace.Gravity)
-            pcall(function()
-                hum.UseJumpPower = true
-                hum.JumpPower = p
-                hum.JumpHeight = h
-            end)
+            if hum.UseJumpPower ~= true then hum.UseJumpPower = true end
+            if hum.JumpPower ~= p then hum.JumpPower = p end
+            if hum.JumpHeight ~= h then hum.JumpHeight = h end
         end
         local launched = false
         local boostFrames = 0
@@ -5455,7 +5673,6 @@ do
             end))
         end
         H_.RunService.Heartbeat:Connect(tick)
-        H_.RunService.RenderStepped:Connect(tick)
         H_.UserInputService.JumpRequest:Connect(function()
             if not H_.Flags.JumpPowerEnabled then return end
             applyJump()
@@ -5468,12 +5685,6 @@ do
         LocalPlayer.CharacterAdded:Connect(function(char)
             char:WaitForChild("Humanoid", 10)
             if H_.Flags.JumpPowerEnabled then startJump() end
-        end)
-        task.spawn(function()
-            while true do
-                tick()
-                task.wait()
-            end
         end)
         JumpSection:Toggle({
             Name = "Jump Power Enabled",
@@ -6911,7 +7122,7 @@ do
         local margin = 34
         local maxDist = H.Flags.OffscreenMaxDistance or 500
         local col = H.NormalizeColor(H.Flags.OffscreenColor, Color3.fromRGB(255, 80, 80))
-        for _, plr in ipairs(H.Players:GetPlayers()) do
+        for _, plr in ipairs(H._snap) do
             if plr ~= H.LocalPlayer and plr.Character and H.IsAlive(plr) and not H.WLIgnore(plr) then
                 local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
                 if hrp then
@@ -6997,7 +7208,7 @@ do
         end
         if not on or not H.HAS_DRAWING then return end
         local col = H.NormalizeColor(H.Flags.SkeletonColor, Color3.fromRGB(120, 255, 120))
-        for _, plr in ipairs(H.Players:GetPlayers()) do
+        for _, plr in ipairs(H._snap) do
             if plr ~= H.LocalPlayer and plr.Character and H.IsAlive(plr) then
                 if not (H.Flags.SkeletonTeamCheck and H.HasTeam(plr)) then
                     local char = plr.Character
@@ -8126,6 +8337,7 @@ do
     end)
 
     H.AddConn(RunService.Heartbeat:Connect(function()
+        H.SnapPlayers()
         pcall(H.UpdateFOVCircle)
         pcall(H.UpdateSilentFOVCircle)
         pcall(H.UpdateSilentAimVisual)
@@ -8293,12 +8505,18 @@ do
         end
     end))
 
+    RunService.RenderStepped:Connect(function()
+        H._frames = H._frames + 1
+    end)
+
     task.spawn(function()
         H.BuildWatermark()
         while H.Watermark do
+            local f = H._frames
+            task.wait(0.5)
+            H._fps = math.floor((H._frames - f) * 2)
             local ok = pcall(H.UpdateWatermark)
             if not ok then break end
-            task.wait(0.5)
         end
     end)
 
@@ -8332,6 +8550,8 @@ do
 
     H.AddConn(Players.PlayerRemoving:Connect(function(plr)
         H.RemoveESP(plr)
+        H._koCache[plr] = nil
+        H._ffCache[plr] = nil
         H.TracerObjects[plr] = nil
         local oo = H.OffscreenObjects[plr]
         if oo then
@@ -8355,6 +8575,8 @@ do
     end))
 
     H.AddConn(LocalPlayer.CharacterAdded:Connect(function(char)
+        H.InvalidateSentryGuns()
+        H._rfDirty = true
         if H.Flags.VoidLoop then
             char:WaitForChild("HumanoidRootPart", 5)
             char:WaitForChild("Humanoid", 5)
@@ -8402,8 +8624,16 @@ do
 
     H.AddConn(LocalPlayer.ChildAdded:Connect(function(c)
         if c.Name == "Backpack" then
+            H._rfDirty = true
+            H.InvalidateSentryGuns()
             H.AddConn(c.ChildAdded:Connect(function(t)
+                H._rfDirty = true
+                H.InvalidateSentryGuns()
                 if t:IsA("Tool") and H.Flags.RapidFire then H.HardenTool(t) end
+            end))
+            H.AddConn(c.ChildRemoved:Connect(function()
+                H._rfDirty = true
+                H.InvalidateSentryGuns()
             end))
         end
     end))
