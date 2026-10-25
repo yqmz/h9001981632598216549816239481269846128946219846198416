@@ -4264,67 +4264,117 @@ do
     local LocalPlayer = H.LocalPlayer
     local RunService = H.RunService
 
-
     local FARM_FIRE_RATE = 0.08
     local FARM_LOCK_TIME = 4
     local FARM_CASH_MIN = 100000
-    local FARM_PAID_SETTLE = 0.15
+    local FARM_PAID_SETTLE = 0.35
+    local FARM_RETURN_SETTLE = 0.5
+    local FARM_MAX_TARGETS = 5
 
     local Farm = {}
     H.Farm = Farm
     Farm.conn = nil
     Farm.voidConn = nil
     Farm.lock = nil
-    Farm.raw = nil
+    Farm.targets = {}
+    Farm.idx = 1
+    Farm.done = {}
     Farm.plr = nil
     Farm.lastResolve = 0
     Farm.lastTarget = nil
     Farm.lastKill = 0
     Farm.lastLockAt = 0
     Farm.lastSafe = nil
-    Farm.dead = false
-    Farm.down = false
-    Farm.aliveSince = 0
+    Farm.returnUntil = 0
 
-    local function farmResolveTarget()
-        local v = H.Flags.FarmTarget
-        local plr = H.resolvePlayer(v)
-        if plr then return plr end
-        local nm = H.Flags.FarmTargetName
-        if nm then
-            local p = Players:FindFirstChild(nm)
-            if p then H.Flags.FarmTarget = p return p end
+    -- ---------- target list (Target 1..5) ----------
+    local function farmTargetList()
+        local now = tick()
+        if now - Farm.lastResolve < 0.5 and #Farm.targets > 0 then return Farm.targets end
+        Farm.lastResolve = now
+        local list = Farm.targets
+        table.clear(list)
+        local seen = {}
+        for i = 1, FARM_MAX_TARGETS do
+            local v = H.Flags["FarmTarget" .. i]
+            local plr = v and H.resolvePlayer(v)
+            if plr and not plr.Parent then plr = nil end
+            if not plr then
+                local nm = H.Flags["FarmTargetName" .. i]
+                if nm then
+                    plr = Players:FindFirstChild(nm)
+                    if plr then H.Flags["FarmTarget" .. i] = plr end
+                end
+            end
+            if plr and plr ~= LocalPlayer and plr.Parent and not seen[plr] then
+                seen[plr] = true
+                list[#list + 1] = plr
+            end
         end
-        return nil
+        local n = #list
+        if n == 0 then Farm.idx = 1
+        elseif Farm.idx > n or Farm.idx < 1 then Farm.idx = 1 end
+        return list
     end
 
     function Farm.Refresh()
-        Farm.raw = nil
+        Farm.lastResolve = 0
         Farm.plr = nil
         Farm.lastTarget = nil
-        Farm.dead = false
-        Farm.down = false
-        Farm.aliveSince = 0
+        Farm.lastKill = 0
+        Farm.lastLockAt = 0
     end
 
-    local function farmTarget()
-        local raw = H.Flags.FarmTarget
-        if raw ~= Farm.raw then
-            Farm.raw = raw
-            Farm.plr = H.resolvePlayer(raw)
+    function Farm.ClearTargets()
+        for i = 1, FARM_MAX_TARGETS do
+            H.Flags["FarmTarget" .. i] = nil
+            H.Flags["FarmTargetName" .. i] = nil
         end
-        local plr = Farm.plr
-        if plr and plr.Parent then return plr end
-        local now = tick()
-        if now - Farm.lastResolve > 0.5 then
-            Farm.lastResolve = now
-            plr = farmResolveTarget()
-            Farm.plr = plr
-            if plr then return plr end
+        table.clear(Farm.done)
+        Farm.idx = 1
+        Farm.Refresh()
+    end
+
+    -- ---------- current target (cycles, KO-pending first) ----------
+    local function farmTarget()
+        local list = farmTargetList()
+        local n = #list
+        if n == 0 then return nil end
+        local firstStand
+        for i = 0, n - 1 do
+            local idx = ((Farm.idx - 1 + i) % n) + 1
+            local plr = list[idx]
+            if plr and plr.Parent and H.IsAlive(plr) and not H.WLIgnore(plr) then
+                local ko = H.IsKO(plr)
+                if not ko then
+                    Farm.done[plr] = nil
+                    if not firstStand then firstStand = idx end
+                elseif not Farm.done[plr] then
+                    Farm.idx = idx
+                    return plr
+                end
+            end
+        end
+        if firstStand then
+            Farm.idx = firstStand
+            return list[firstStand]
         end
         return nil
     end
 
+    local function farmAdvance(plr)
+        if plr then Farm.done[plr] = true end
+        local n = #Farm.targets
+        if n > 0 then
+            Farm.idx = Farm.idx + 1
+            if Farm.idx > n then Farm.idx = 1 end
+        end
+        Farm.lastTarget = nil
+        Farm.lastKill = 0
+        Farm.lastLockAt = 0
+    end
+
+    -- ---------- gun ----------
     local function farmGetGun()
         local gun = H.RageFindGun()
         if gun then return gun end
@@ -4345,6 +4395,7 @@ do
         return nil
     end
 
+    -- ---------- cash ----------
     local function farmCash()
         local pf = workspace:FindFirstChild("Players")
         pf = pf and pf:FindFirstChild(LocalPlayer.Name)
@@ -4370,6 +4421,7 @@ do
         return nil
     end
 
+    -- ---------- safety ----------
     local function farmSafeToTP(plr)
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -4401,6 +4453,7 @@ do
         end
     end
 
+    -- ---------- tp + stomp lock ----------
     local function farmEndLock()
         local lock = Farm.lock
         Farm.lock = nil
@@ -4496,6 +4549,8 @@ do
         local cash = farmCash()
         if now - (lock.dbg or 0) > 0.5 then
             lock.dbg = now
+            print(string.format("[farm] cash=%s base=%s stomps=%d paid=%s",
+                tostring(cash), tostring(lock.cashAt), lock.stomps or 0, tostring(lock.paid)))
         end
         if cash and lock.cashAt then
             if not lock.paid and cash - lock.cashAt >= FARM_CASH_MIN then
@@ -4508,6 +4563,7 @@ do
         end
     end
 
+    -- ---------- main tick ----------
     local function farmTick()
         local kill  = H.Flags.FarmKill  == true
         local stomp = H.Flags.FarmStomp == true
@@ -4515,41 +4571,36 @@ do
         if not H.MainRemote then H.MainRemote = H.findMainRemote() end
 
         local now = tick()
+        local settling = now < Farm.returnUntil
         local plr = farmTarget()
-        if plr == LocalPlayer then plr = nil end
-        if plr ~= Farm.lastTarget then
-            Farm.lastTarget = plr
-            Farm.dead = false
-            Farm.down = false
-            Farm.aliveSince = 0
-            if Farm.lock and Farm.lock.plr ~= plr then farmEndLock() end
-        end
+
+        if Farm.lock and Farm.lock.plr ~= plr then farmEndLock() end
         if not plr then return end
 
-        local alive = H.IsAlive(plr)
-        local ko = H.IsKO(plr)
-
-        if not alive then
-            if Farm.lock then farmEndLock() end
-            Farm.dead = true
-            Farm.down = false
-            Farm.aliveSince = 0
-            return
+        if plr ~= Farm.lastTarget then
+            Farm.lastTarget = plr
+            Farm.lastKill = 0
+            print(string.format("[farm] now on %d/%d = %s", Farm.idx, #Farm.targets, plr.Name))
         end
 
+        local ko = H.IsKO(plr)
+
+        -- knocked: tp on top, stomp until the cash lands, then move to the next target
         if ko and stomp then
-            Farm.dead = false
-            Farm.aliveSince = 0
             if Farm.lock then
                 farmTickLock()
                 local lock = Farm.lock
                 if not lock then
-                    Farm.down = true
-                elseif lock.paid and now - lock.paidAt >= 0.35 then
+                    Farm.lastLockAt = now
+                elseif lock.paid and now - lock.paidAt >= FARM_PAID_SETTLE then
+                    local donePlr = lock.plr
                     farmEndLock()
-                    Farm.down = true
+                    Farm.returnUntil = now + FARM_RETURN_SETTLE
+                    farmAdvance(donePlr)
+                    print(string.format("[farm] stomp confirmed on %s -> home, next %d/%d",
+                        donePlr.Name, Farm.idx, #Farm.targets))
                 end
-            elseif not Farm.down and farmSafeToTP(plr) and now - Farm.lastLockAt >= 0.4 then
+            elseif not settling and now - Farm.lastLockAt >= 0.4 and farmSafeToTP(plr) then
                 Farm.lastLockAt = now
                 farmStartLock(plr)
             end
@@ -4558,19 +4609,9 @@ do
             farmEndLock()
         end
 
-        if Farm.down or Farm.dead then
-            if Farm.aliveSince == 0 then
-                Farm.aliveSince = now
-                return
-            end
-            if now - Farm.aliveSince < 0.3 then return end
-            Farm.dead = false
-            Farm.down = false
-            Farm.aliveSince = 0
-            Farm.lastKill = 0
-            Farm.lastLockAt = now
-        end
+        if not H.IsAlive(plr) then return end
 
+        -- kill: only while they are standing
         if kill and not ko and not H.HasForceField(plr)
             and now - Farm.lastKill >= FARM_FIRE_RATE then
             local gun = farmGetGun()
@@ -4602,12 +4643,13 @@ do
             if Farm.conn then Farm.conn:Disconnect() Farm.conn = nil end
             if Farm.voidConn then Farm.voidConn:Disconnect() Farm.voidConn = nil end
             farmEndLock()
-            Farm.raw = nil
+            Farm.lastResolve = 0
             Farm.plr = nil
             Farm.lastTarget = nil
-            Farm.dead = false
-            Farm.down = false
-            Farm.aliveSince = 0
+            Farm.lastKill = 0
+            Farm.lastLockAt = 0
+            Farm.returnUntil = 0
+            table.clear(Farm.done)
         end
     end
 
@@ -4616,6 +4658,8 @@ do
         H.Flags.FarmStomp = false
         Farm.Apply()
     end
+
+    H.AddConn(Players.PlayerRemoving:Connect(function(p) Farm.done[p] = nil end))
 
     if H.Flags.FarmKill  == nil then H.Flags.FarmKill  = false end
     if H.Flags.FarmStomp == nil then H.Flags.FarmStomp = false end
@@ -7131,23 +7175,42 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
         local FarmTab = Group:Tab({ Name = "Farm", Icon = "tractor" })
         local Sec = FarmTab:Section({ Name = "Farm", Side = "Left" })
 
-        Sec:Dropdown({
-            Name = "Select Target",
-            Flag = "FarmTarget",
-            Special = "Players",
-            Callback = function(v)
-                H.Flags.FarmTarget     = v
-                H.Flags.FarmTargetName = v and v.Name or nil
-                if H.Farm then H.Farm.Refresh() end
+        local function anyFarmTarget()
+            for i = 1, 5 do
+                if H.Flags["FarmTarget" .. i] then return true end
+            end
+            return false
+        end
+
+        for i = 1, 5 do
+            Sec:Dropdown({
+                Name = "Target " .. i,
+                Flag = "FarmTarget" .. i,
+                Special = "Players",
+                Callback = function(v)
+                    local plr = H.resolvePlayer(v)
+                    H.Flags["FarmTarget" .. i] = plr or v
+                    H.Flags["FarmTargetName" .. i] = plr and plr.Name or nil
+                    if H.Farm then H.Farm.Refresh() end
+                end,
+            })
+        end
+
+        Sec:Button({
+            Name = "Clear Targets",
+            Callback = function()
+                if H.Farm then H.Farm.ClearTargets() end
+                Arvn_:Notify({ Title = "Farm", Content = "Targets cleared", Kind = "Info" })
             end,
         })
+
         Sec:Toggle({
             Name = "Kill Target",
             Flag = "FarmKill",
             Default = false,
             Callback = function(v)
                 H.Flags.FarmKill = v
-                if v and not H.Flags.FarmTarget then
+                if v and not anyFarmTarget() then
                     Arvn_:Notify({ Title = "Farm", Content = "Select a target first", Kind = "Warning" })
                 end
                 H.Farm.Apply()
@@ -7159,7 +7222,7 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
             Default = false,
             Callback = function(v)
                 H.Flags.FarmStomp = v
-                if v and not H.Flags.FarmTarget then
+                if v and not anyFarmTarget() then
                     Arvn_:Notify({ Title = "Farm", Content = "Select a target first", Kind = "Warning" })
                 end
                 H.Farm.Apply()
