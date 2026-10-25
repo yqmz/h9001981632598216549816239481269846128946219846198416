@@ -4492,7 +4492,6 @@ do
             paid = false,
             paidAt = 0,
             stomps = 0,
-            dbg = 0,
         }
         local hum = H.GetHum()
         if hum then pcall(function() hum.PlatformStand = true end) end
@@ -4547,11 +4546,6 @@ do
         if lock.stomped and now - lock.stompedAt < 0.5 then return end
 
         local cash = farmCash()
-        if now - (lock.dbg or 0) > 0.5 then
-            lock.dbg = now
-            print(string.format("[farm] cash=%s base=%s stomps=%d paid=%s",
-                tostring(cash), tostring(lock.cashAt), lock.stomps or 0, tostring(lock.paid)))
-        end
         if cash and lock.cashAt then
             if not lock.paid and cash - lock.cashAt >= FARM_CASH_MIN then
                 lock.paid = true
@@ -4580,7 +4574,6 @@ do
         if plr ~= Farm.lastTarget then
             Farm.lastTarget = plr
             Farm.lastKill = 0
-            print(string.format("[farm] now on %d/%d = %s", Farm.idx, #Farm.targets, plr.Name))
         end
 
         local ko = H.IsKO(plr)
@@ -4597,8 +4590,6 @@ do
                     farmEndLock()
                     Farm.returnUntil = now + FARM_RETURN_SETTLE
                     farmAdvance(donePlr)
-                    print(string.format("[farm] stomp confirmed on %s -> home, next %d/%d",
-                        donePlr.Name, Farm.idx, #Farm.targets))
                 end
             elseif not settling and now - Farm.lastLockAt >= 0.4 and farmSafeToTP(plr) then
                 Farm.lastLockAt = now
