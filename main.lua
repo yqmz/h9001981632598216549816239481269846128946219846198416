@@ -4264,52 +4264,350 @@ do
     local LocalPlayer = H.LocalPlayer
     local RunService = H.RunService
 
-    -- ============================================================
-    --  FARM : Select Target / Kill Target / Stomp Target
-    --  Drives the existing rage autokill + auto-stomp on ONE player.
-    -- ============================================================
+
+    local FARM_FIRE_RATE = 0.08
+    local FARM_LOCK_TIME = 4
+    local FARM_CASH_MIN = 100000
+    local FARM_PAID_SETTLE = 0.15
 
     local Farm = {}
     H.Farm = Farm
     Farm.conn = nil
+    Farm.voidConn = nil
+    Farm.lock = nil
+    Farm.raw = nil
+    Farm.plr = nil
+    Farm.lastResolve = 0
+    Farm.lastTarget = nil
+    Farm.lastKill = 0
+    Farm.lastLockAt = 0
+    Farm.lastSafe = nil
+    Farm.dead = false
+    Farm.down = false
+    Farm.aliveSince = 0
+
+    local function farmResolveTarget()
+        local v = H.Flags.FarmTarget
+        local plr = H.resolvePlayer(v)
+        if plr then return plr end
+        local nm = H.Flags.FarmTargetName
+        if nm then
+            local p = Players:FindFirstChild(nm)
+            if p then H.Flags.FarmTarget = p return p end
+        end
+        return nil
+    end
+
+    function Farm.Refresh()
+        Farm.raw = nil
+        Farm.plr = nil
+        Farm.lastTarget = nil
+        Farm.dead = false
+        Farm.down = false
+        Farm.aliveSince = 0
+    end
+
+    local function farmTarget()
+        local raw = H.Flags.FarmTarget
+        if raw ~= Farm.raw then
+            Farm.raw = raw
+            Farm.plr = H.resolvePlayer(raw)
+        end
+        local plr = Farm.plr
+        if plr and plr.Parent then return plr end
+        local now = tick()
+        if now - Farm.lastResolve > 0.5 then
+            Farm.lastResolve = now
+            plr = farmResolveTarget()
+            Farm.plr = plr
+            if plr then return plr end
+        end
+        return nil
+    end
+
+    local function farmGetGun()
+        local gun = H.RageFindGun()
+        if gun then return gun end
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+        if char and hum and bp then
+            for _, t in ipairs(bp:GetChildren()) do
+                if t:IsA("Tool") and t:FindFirstChild("Handle") then
+                    local n = t.Name:lower()
+                    if not n:find("knife") and not n:find("fist") and not n:find("bat") then
+                        pcall(function() hum:EquipTool(t) end)
+                        return t
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function farmCash()
+        local pf = workspace:FindFirstChild("Players")
+        pf = pf and pf:FindFirstChild(LocalPlayer.Name)
+        if pf then
+            local df = pf:FindFirstChild("DataFolder")
+            local c = df and df:FindFirstChild("Currency3")
+            if c and type(c.Value) == "number" then return c.Value end
+            for _, d in ipairs(pf:GetDescendants()) do
+                if d.Name == "Currency3" and type(d.Value) == "number" then return d.Value end
+            end
+        end
+        local ls = LocalPlayer:FindFirstChild("leaderstats")
+        if ls then
+            for _, n in ipairs({ "Currency3", "Cash", "Money" }) do
+                local v = ls:FindFirstChild(n)
+                if v and type(v.Value) == "number" then return v.Value end
+            end
+        end
+        for _, n in ipairs({ "Currency3", "Cash", "Money" }) do
+            local v = LocalPlayer:FindFirstChild(n)
+            if v and type(v.Value) == "number" then return v.Value end
+        end
+        return nil
+    end
+
+    local function farmSafeToTP(plr)
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then return false end
+        local st = hum:GetState()
+        if st == Enum.HumanoidStateType.Physics
+            or st == Enum.HumanoidStateType.FallingDown
+            or st == Enum.HumanoidStateType.Ragdoll then
+            return false
+        end
+        local tHRP = plr and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+        if not tHRP then return false end
+        if (tHRP.Position.Y - hrp.Position.Y) > 40 then return false end
+        return true
+    end
+
+    local function farmVoidGuard()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then return end
+        if hum.FloorMaterial ~= Enum.Material.Air and hrp.Position.Y > -20 then
+            Farm.lastSafe = hrp.Position
+        end
+        if Farm.lock then return end
+        if hrp.Position.Y < -60 and Farm.lastSafe then
+            hrp.CFrame = CFrame.new(Farm.lastSafe + Vector3.new(0, 5, 0))
+        end
+    end
+
+    local function farmEndLock()
+        local lock = Farm.lock
+        Farm.lock = nil
+        local myHRP = H.GetHRP()
+        local hum = H.GetHum()
+        if myHRP and lock and lock.home then
+            pcall(function()
+                myHRP.AssemblyLinearVelocity = Vector3.zero
+                myHRP.AssemblyAngularVelocity = Vector3.zero
+                myHRP.CFrame = lock.home
+                myHRP.AssemblyLinearVelocity = Vector3.zero
+                myHRP.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
+        if hum then
+            pcall(function()
+                hum.PlatformStand = false
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+        end
+    end
+
+    local function farmStartLock(plr)
+        if Farm.lock then return end
+        local myHRP = H.GetHRP()
+        local tHRP = H.RageGetHRP(plr)
+        if not myHRP or not tHRP then return end
+        Farm.lock = {
+            plr = plr,
+            home = myHRP.CFrame,
+            expires = tick() + FARM_LOCK_TIME,
+            lastStomp = 0,
+            stomped = false,
+            stompedAt = 0,
+            cashAt = nil,
+            paid = false,
+            paidAt = 0,
+            stomps = 0,
+            dbg = 0,
+        }
+        local hum = H.GetHum()
+        if hum then pcall(function() hum.PlatformStand = true end) end
+    end
+
+    local function farmTickLock()
+        local lock = Farm.lock
+        if not lock then return end
+        local myHRP = H.GetHRP()
+        local plr = lock.plr
+        local tHRP = plr and plr.Parent and H.RageGetHRP(plr)
+        local now = tick()
+
+        if not myHRP or not tHRP or now > lock.expires
+            or not H.IsAlive(plr) or not H.IsAlive(LocalPlayer) then
+            return farmEndLock()
+        end
+        if not H.IsKO(plr) then return farmEndLock() end
+
+        local hum = H.GetHum()
+        if hum and not hum.PlatformStand then pcall(function() hum.PlatformStand = true end) end
+
+        local body = tHRP.Parent:FindFirstChild("UpperTorso")
+            or tHRP.Parent:FindFirstChild("Torso") or tHRP
+        local goal = body.Position + Vector3.new(0, 3.5, 0)
+        local delta = goal - myHRP.Position
+
+        pcall(function()
+            myHRP.AssemblyLinearVelocity = Vector3.zero
+            myHRP.AssemblyAngularVelocity = Vector3.zero
+            myHRP.CFrame = CFrame.new(goal, goal + Vector3.new(delta.X, 0, delta.Z) + Vector3.new(0, 0, 0.001))
+        end)
+
+        if now - lock.lastStomp >= 0.1 then
+            lock.lastStomp = now
+            lock.stomps = (lock.stomps or 0) + 1
+            if not lock.stomped then
+                lock.stomped = true
+                lock.stompedAt = now
+                lock.cashAt = farmCash()
+            end
+            local char = plr.Character
+            if char and H.MainRemote then
+                pcall(function()
+                    H.MainRemote:FireServer("Stomp")
+                    H.MainRemote:FireServer("StompPlayer", char)
+                    H.MainRemote:FireServer("Stomp", char)
+                end)
+            end
+        end
+
+        if lock.stomped and now - lock.stompedAt < 0.5 then return end
+
+        local cash = farmCash()
+        if now - (lock.dbg or 0) > 0.5 then
+            lock.dbg = now
+        end
+        if cash and lock.cashAt then
+            if not lock.paid and cash - lock.cashAt >= FARM_CASH_MIN then
+                lock.paid = true
+                lock.paidAt = now
+            end
+        elseif lock.stomped and not lock.paid and now - lock.stompedAt >= 1.2 then
+            lock.paid = true
+            lock.paidAt = now
+        end
+    end
 
     local function farmTick()
         local kill  = H.Flags.FarmKill  == true
         local stomp = H.Flags.FarmStomp == true
+        if not (kill or stomp) then return end
+        if not H.MainRemote then H.MainRemote = H.findMainRemote() end
 
-        H.Flags.RageAutoKill  = kill or stomp
-        H.Flags.RageTPAuto    = stomp
-        H.Flags.RageAutoStomp = stomp
+        local now = tick()
+        local plr = farmTarget()
+        if plr == LocalPlayer then plr = nil end
+        if plr ~= Farm.lastTarget then
+            Farm.lastTarget = plr
+            Farm.dead = false
+            Farm.down = false
+            Farm.aliveSince = 0
+            if Farm.lock and Farm.lock.plr ~= plr then farmEndLock() end
+        end
+        if not plr then return end
 
-        local t = H.Flags.RageTarget1
-        if t and t.Parent then return end
-        local nm = H.Flags.FarmTargetName
-        if not nm then return end
-        local p = Players:FindFirstChild(nm)
-        if p then H.Flags.RageTarget1 = p end
+        local alive = H.IsAlive(plr)
+        local ko = H.IsKO(plr)
+
+        if not alive then
+            if Farm.lock then farmEndLock() end
+            Farm.dead = true
+            Farm.down = false
+            Farm.aliveSince = 0
+            return
+        end
+
+        if ko and stomp then
+            Farm.dead = false
+            Farm.aliveSince = 0
+            if Farm.lock then
+                farmTickLock()
+                local lock = Farm.lock
+                if not lock then
+                    Farm.down = true
+                elseif lock.paid and now - lock.paidAt >= 0.35 then
+                    farmEndLock()
+                    Farm.down = true
+                end
+            elseif not Farm.down and farmSafeToTP(plr) and now - Farm.lastLockAt >= 0.4 then
+                Farm.lastLockAt = now
+                farmStartLock(plr)
+            end
+            return
+        elseif Farm.lock then
+            farmEndLock()
+        end
+
+        if Farm.down or Farm.dead then
+            if Farm.aliveSince == 0 then
+                Farm.aliveSince = now
+                return
+            end
+            if now - Farm.aliveSince < 0.3 then return end
+            Farm.dead = false
+            Farm.down = false
+            Farm.aliveSince = 0
+            Farm.lastKill = 0
+            Farm.lastLockAt = now
+        end
+
+        if kill and not ko and not H.HasForceField(plr)
+            and now - Farm.lastKill >= FARM_FIRE_RATE then
+            local gun = farmGetGun()
+            if gun then
+                local ammo = gun:FindFirstChild("Ammo")
+                if ammo and ammo.Value <= 0 then
+                    H.TriggerReloadTool(gun)
+                else
+                    if H.DirectShoot(plr, gun) then
+                        Farm.lastKill = now
+                        H.TriggerReloadTool(gun)
+                    end
+                end
+            end
+        end
     end
 
     function Farm.Apply()
         local on = (H.Flags.FarmKill == true) or (H.Flags.FarmStomp == true)
-
-        H.Flags.RageAutoKill  = on
-        H.Flags.RageTPAuto    = H.Flags.FarmStomp == true
-        H.Flags.RageAutoStomp = H.Flags.FarmStomp == true
-
         if on then
-            H.Flags.RageAutoReload = true
-            H.Flags.RageWaitFF     = true
             if not H.MainRemote then H.MainRemote = H.findMainRemote() end
-            if H.MainRemote then
-                pcall(function() H.MainRemote:FireServer("ChangeSettings", "AutoReload", true) end)
-            end
             if not Farm.conn then
                 Farm.conn = RunService.Heartbeat:Connect(farmTick)
             end
+            if not Farm.voidConn then
+                Farm.voidConn = RunService.Heartbeat:Connect(farmVoidGuard)
+            end
         else
             if Farm.conn then Farm.conn:Disconnect() Farm.conn = nil end
-            pcall(H.RestoreRageTargetPositions, H.RageTargetOriginalCF)
-            H.RageTargetOriginalCF = {}
+            if Farm.voidConn then Farm.voidConn:Disconnect() Farm.voidConn = nil end
+            farmEndLock()
+            Farm.raw = nil
+            Farm.plr = nil
+            Farm.lastTarget = nil
+            Farm.dead = false
+            Farm.down = false
+            Farm.aliveSince = 0
         end
     end
 
@@ -6840,9 +7138,7 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
             Callback = function(v)
                 H.Flags.FarmTarget     = v
                 H.Flags.FarmTargetName = v and v.Name or nil
-                H.Flags.RageTarget1    = v
-                H.Flags.RageTarget2    = nil
-                H.Flags.RageTarget3    = nil
+                if H.Farm then H.Farm.Refresh() end
             end,
         })
         Sec:Toggle({
@@ -6851,7 +7147,7 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
             Default = false,
             Callback = function(v)
                 H.Flags.FarmKill = v
-                if v and not H.Flags.RageTarget1 then
+                if v and not H.Flags.FarmTarget then
                     Arvn_:Notify({ Title = "Farm", Content = "Select a target first", Kind = "Warning" })
                 end
                 H.Farm.Apply()
@@ -6863,14 +7159,12 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
             Default = false,
             Callback = function(v)
                 H.Flags.FarmStomp = v
-                if v and not H.Flags.RageTarget1 then
+                if v and not H.Flags.FarmTarget then
                     Arvn_:Notify({ Title = "Farm", Content = "Select a target first", Kind = "Warning" })
                 end
                 H.Farm.Apply()
             end,
         })
-
-
     end
 
     do
