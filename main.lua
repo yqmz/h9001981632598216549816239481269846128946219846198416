@@ -4255,7 +4255,72 @@ do
         H.CleanupRapidFire()
         for plr in pairs(H.ESPObjects) do H.RemoveESP(plr) end
         H.AutoStompLast = {}
+        if H.Farm then pcall(H.Farm.Disable) end
     end
+end
+
+do
+    local Players = H.Players
+    local LocalPlayer = H.LocalPlayer
+    local RunService = H.RunService
+
+    -- ============================================================
+    --  FARM : Select Target / Kill Target / Stomp Target
+    --  Drives the existing rage autokill + auto-stomp on ONE player.
+    -- ============================================================
+
+    local Farm = {}
+    H.Farm = Farm
+    Farm.conn = nil
+
+    local function farmTick()
+        local kill  = H.Flags.FarmKill  == true
+        local stomp = H.Flags.FarmStomp == true
+
+        H.Flags.RageAutoKill  = kill or stomp
+        H.Flags.RageTPAuto    = stomp
+        H.Flags.RageAutoStomp = stomp
+
+        local t = H.Flags.RageTarget1
+        if t and t.Parent then return end
+        local nm = H.Flags.FarmTargetName
+        if not nm then return end
+        local p = Players:FindFirstChild(nm)
+        if p then H.Flags.RageTarget1 = p end
+    end
+
+    function Farm.Apply()
+        local on = (H.Flags.FarmKill == true) or (H.Flags.FarmStomp == true)
+
+        H.Flags.RageAutoKill  = on
+        H.Flags.RageTPAuto    = H.Flags.FarmStomp == true
+        H.Flags.RageAutoStomp = H.Flags.FarmStomp == true
+
+        if on then
+            H.Flags.RageAutoReload = true
+            H.Flags.RageWaitFF     = true
+            if not H.MainRemote then H.MainRemote = H.findMainRemote() end
+            if H.MainRemote then
+                pcall(function() H.MainRemote:FireServer("ChangeSettings", "AutoReload", true) end)
+            end
+            if not Farm.conn then
+                Farm.conn = RunService.Heartbeat:Connect(farmTick)
+            end
+        else
+            if Farm.conn then Farm.conn:Disconnect() Farm.conn = nil end
+            pcall(H.RestoreRageTargetPositions, H.RageTargetOriginalCF)
+            H.RageTargetOriginalCF = {}
+        end
+    end
+
+    function Farm.Disable()
+        H.Flags.FarmKill  = false
+        H.Flags.FarmStomp = false
+        Farm.Apply()
+    end
+
+    if H.Flags.FarmKill  == nil then H.Flags.FarmKill  = false end
+    if H.Flags.FarmStomp == nil then H.Flags.FarmStomp = false end
 end
 
 do
@@ -6765,6 +6830,50 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
     end
 
     do
+        local FarmTab = Group:Tab({ Name = "Farm", Icon = "tractor" })
+        local Sec = FarmTab:Section({ Name = "Farm", Side = "Left" })
+
+        Sec:Dropdown({
+            Name = "Select Target",
+            Flag = "FarmTarget",
+            Special = "Players",
+            Callback = function(v)
+                H.Flags.FarmTarget     = v
+                H.Flags.FarmTargetName = v and v.Name or nil
+                H.Flags.RageTarget1    = v
+                H.Flags.RageTarget2    = nil
+                H.Flags.RageTarget3    = nil
+            end,
+        })
+        Sec:Toggle({
+            Name = "Kill Target",
+            Flag = "FarmKill",
+            Default = false,
+            Callback = function(v)
+                H.Flags.FarmKill = v
+                if v and not H.Flags.RageTarget1 then
+                    Arvn_:Notify({ Title = "Farm", Content = "Select a target first", Kind = "Warning" })
+                end
+                H.Farm.Apply()
+            end,
+        })
+        Sec:Toggle({
+            Name = "Stomp Target",
+            Flag = "FarmStomp",
+            Default = false,
+            Callback = function(v)
+                H.Flags.FarmStomp = v
+                if v and not H.Flags.RageTarget1 then
+                    Arvn_:Notify({ Title = "Farm", Content = "Select a target first", Kind = "Warning" })
+                end
+                H.Farm.Apply()
+            end,
+        })
+
+
+    end
+
+    do
         local SettingsTab = Group:Tab({ Name = "Settings", Icon = "settings" })
         local SettingsSection = SettingsTab:Section("Settings")
         SettingsSection:Button({
@@ -6794,6 +6903,7 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
                     H_.StopSpeedLoop()
                     H_.StopVoidLoop()
                     H_.StopOrbit()
+                    if H_.Farm then pcall(H_.Farm.Disable) end
                     pcall(H_.ApplyAntiFlingCollide, false)
                     if H_.FOVCircle then pcall(function() H_.FOVCircle:Remove() end) H_.FOVCircle = nil end
                     if H_.SilentFOVCircle then pcall(function() H_.SilentFOVCircle:Remove() end) H_.SilentFOVCircle = nil end
