@@ -4573,7 +4573,6 @@ do
         if plr ~= Farm.lastTarget then
             Farm.lastTarget = plr
             Farm.lastKill = 0
-            print(string.format("[farm] now on %d/%d = %s", Farm.idx, #Farm.targets, plr.Name))
         end
 
         local ko = H.IsKO(plr)
@@ -4590,8 +4589,7 @@ do
                     farmEndLock()
                     Farm.returnUntil = now + FARM_RETURN_SETTLE
                     farmAdvance(donePlr)
-                    print(string.format("[farm] stomp confirmed on %s -> home, next %d/%d",
-                        donePlr.Name, Farm.idx, #Farm.targets))
+
                 end
             elseif not settling and now - Farm.lastLockAt >= 0.4 and farmSafeToTP(plr) then
                 Farm.lastLockAt = now
