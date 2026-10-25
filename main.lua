@@ -4287,6 +4287,7 @@ do
     Farm.lastSafe = nil
     Farm.returnUntil = 0
 
+    -- ---------- target list (Target 1..5) ----------
     local function farmTargetList()
         local now = tick()
         if now - Farm.lastResolve < 0.5 and #Farm.targets > 0 then return Farm.targets end
@@ -4334,6 +4335,7 @@ do
         Farm.Refresh()
     end
 
+    -- ---------- current target (cycles, KO-pending first) ----------
     local function farmTarget()
         local list = farmTargetList()
         local n = #list
@@ -4372,6 +4374,7 @@ do
         Farm.lastLockAt = 0
     end
 
+    -- ---------- gun ----------
     local function farmGetGun()
         local gun = H.RageFindGun()
         if gun then return gun end
@@ -4392,6 +4395,7 @@ do
         return nil
     end
 
+    -- ---------- cash ----------
     local function farmCash()
         local pf = workspace:FindFirstChild("Players")
         pf = pf and pf:FindFirstChild(LocalPlayer.Name)
@@ -4417,6 +4421,7 @@ do
         return nil
     end
 
+    -- ---------- safety ----------
     local function farmSafeToTP(plr)
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -4448,6 +4453,7 @@ do
         end
     end
 
+    -- ---------- tp + stomp lock ----------
     local function farmEndLock()
         local lock = Farm.lock
         Farm.lock = nil
@@ -4543,6 +4549,7 @@ do
         local cash = farmCash()
         if now - (lock.dbg or 0) > 0.5 then
             lock.dbg = now
+            print(string.format("[farm] cash=%s base=%s stomps=%d paid=%s",
                 tostring(cash), tostring(lock.cashAt), lock.stomps or 0, tostring(lock.paid)))
         end
         if cash and lock.cashAt then
@@ -4556,7 +4563,7 @@ do
         end
     end
 
-
+    -- ---------- main tick ----------
     local function farmTick()
         local kill  = H.Flags.FarmKill  == true
         local stomp = H.Flags.FarmStomp == true
@@ -4573,11 +4580,12 @@ do
         if plr ~= Farm.lastTarget then
             Farm.lastTarget = plr
             Farm.lastKill = 0
+            print(string.format("[farm] now on %d/%d = %s", Farm.idx, #Farm.targets, plr.Name))
         end
 
         local ko = H.IsKO(plr)
 
-
+        -- knocked: tp on top, stomp until the cash lands, then move to the next target
         if ko and stomp then
             if Farm.lock then
                 farmTickLock()
@@ -4589,7 +4597,8 @@ do
                     farmEndLock()
                     Farm.returnUntil = now + FARM_RETURN_SETTLE
                     farmAdvance(donePlr)
-
+                    print(string.format("[farm] stomp confirmed on %s -> home, next %d/%d",
+                        donePlr.Name, Farm.idx, #Farm.targets))
                 end
             elseif not settling and now - Farm.lastLockAt >= 0.4 and farmSafeToTP(plr) then
                 Farm.lastLockAt = now
@@ -4602,6 +4611,7 @@ do
 
         if not H.IsAlive(plr) then return end
 
+        -- kill: only while they are standing
         if kill and not ko and not H.HasForceField(plr)
             and now - Farm.lastKill >= FARM_FIRE_RATE then
             local gun = farmGetGun()
