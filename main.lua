@@ -359,26 +359,30 @@ do
 
     H._ffCache = {}
 
+    H.SPAWN_SHIELD = 1.0
+
+    local function markSpawn(plr, char)
+        if plr and char then H._ffCache[plr] = { t = tick(), char = char } end
+    end
+
+    for _, p in ipairs(H.Players:GetPlayers()) do
+        if p.Character then markSpawn(p, p.Character) end
+        p.CharacterAdded:Connect(function(c) markSpawn(p, c) end)
+    end
+    H.Players.PlayerAdded:Connect(function(p)
+        p.CharacterAdded:Connect(function(c) markSpawn(p, c) end)
+    end)
+
     function H.HasForceField(plr)
-        local c = plr and plr.Character
+        if not plr then return false end
+        local c = plr.Character
         if not c then return false end
         local e = H._ffCache[plr]
-        local now = tick()
-        if e and now - e.t < 0.05 and e.char == c then return e.v end
-        local v = false
-        if c:FindFirstChildOfClass("ForceField") ~= nil then
-            v = true
-        else
-            local be = c:FindFirstChild("BodyEffects")
-            if be then
-                local ff = be:FindFirstChild("ForceField")
-                if ff and (ff:IsA("BoolValue") and ff.Value or ff:IsA("ForceField")) then
-                    v = true
-                end
-            end
+        if not e or e.char ~= c then
+            markSpawn(plr, c)
+            return true
         end
-        H._ffCache[plr] = { v = v, t = now, char = c }
-        return v
+        return (tick() - e.t) < (H.SPAWN_SHIELD or 0.95)
     end
 
     function H.GetTargetPart(plr, partName)
@@ -3053,7 +3057,7 @@ do
         if not H.RageIsFullyLoaded(plr) then return false end
         local knocked, grabbed = H.IsKO(plr)
         if knocked or grabbed then return false end
-        if H.HasForceField(plr) then return false end
+        if H.Flags.RageWaitFF ~= false and H.HasForceField(plr) then return false end
         return true
     end
 
@@ -3333,12 +3337,24 @@ do
         end
     end
 
+    function H.RageConfirmedDown(plr)
+        local c = plr and plr.Character
+        if not c then return false end
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health <= 0 then return true end
+        local be = c:FindFirstChild("BodyEffects")
+        if be then
+            local ko = be:FindFirstChild("K.O") or be:FindFirstChild("Knocked") or be:FindFirstChild("k.o") or be:FindFirstChild("KO")
+            if ko and ko.Value == true then return true end
+        end
+        return false
+    end
+
     function H.RageTryTP(plr)
         if not H.Flags.RageTPAuto or not H.Flags.RageAutoKill then return end
         if H.WLIgnore(plr) then return end
         if H.RageTPQueue then return end
-        local knocked = H.IsKO(plr)
-        if not knocked then return end
+        if not H.RageConfirmedDown(plr) then return end
         local now = tick()
         if H.RageTPLast[plr] and now - H.RageTPLast[plr] < 0.4 then return end
         H.RageTPLast[plr] = now
@@ -3361,8 +3377,7 @@ do
     function H.RageTryStomp(plr)
         if not H.Flags.RageAutoStomp or not H.Flags.RageAutoKill or not H.MainRemote then return end
         if H.WLIgnore(plr) then return end
-        local knocked = H.IsKO(plr)
-        if not knocked then return end
+        if not H.RageConfirmedDown(plr) then return end
         local now = tick()
         if H.RageLastStomp[plr] and now - H.RageLastStomp[plr] < 0.6 then return end
         H.RageLastStomp[plr] = now
@@ -3380,7 +3395,7 @@ do
         H.RageLastStompAll = now
         for _, plr in ipairs(H._snap) do
             if plr ~= LocalPlayer and not H.WLIgnore(plr) then
-                if H.IsKO(plr) then
+                if H.RageConfirmedDown(plr) then
                     pcall(function()
                         H.MainRemote:FireServer("Stomp")
                         H.MainRemote:FireServer("StompPlayer", plr.Character)
@@ -3716,7 +3731,7 @@ do
         for plr in pairs(newList) do
             if not H.RageTargets[plr] then
                 H.RageTargets[plr] = true
-                H.RageTargetReady[plr] = not H.HasForceField(plr)
+                H.RageTargetReady[plr] = (H.Flags.RageWaitFF == false) or not H.HasForceField(plr)
                 local char = plr.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then H.RageTargetOriginalCF[plr] = hrp.CFrame end
@@ -3781,21 +3796,36 @@ do
             return char:FindFirstChild("Head") and char:FindFirstChild("HumanoidRootPart")
                 and char:FindFirstChildOfClass("Humanoid") and char:FindFirstChildOfClass("Humanoid").Health > 0
         end
-        local function hasForceField(plr)
-            local char = plr and plr.Character
-            if not char then return true end
-            if char:FindFirstChildOfClass("ForceField") then return true end
-            if char:FindFirstChild("ForceField") then return true end
-            if char:GetAttribute("ForceField") then return true end
-            local be = char:FindFirstChild("BodyEffects")
-            if be then
-                local ff = be:FindFirstChild("ForceField")
-                if ff and (ff:IsA("BoolValue") and ff.Value or ff:IsA("ForceField")) then
-                    return true
-                end
-            end
-            return false
-        end
+        local _ffCache = {}
+local SPAWN_SHIELD = 1.0
+
+local function markSpawn(plr)
+    _ffCache[plr] = tick()
+end
+
+local _Players = game:GetService("Players")
+for _, p in ipairs(_Players:GetPlayers()) do
+    p.CharacterAdded:Connect(function() markSpawn(p) end)
+end
+_Players.PlayerAdded:Connect(function(p)
+    p.CharacterAdded:Connect(function() markSpawn(p) end)
+end)
+
+local function hasForceField(plr)
+    if not plr then return true end
+    local char = plr.Character
+    if not char then return true end
+
+   
+    local t0 = _ffCache[plr]
+    if t0 and (tick() - t0) >= SPAWN_SHIELD then return false end
+
+    local mirror = workspace:FindFirstChild("Players")
+    if mirror and char.Parent ~= mirror then
+        return true  
+    end
+    return false
+end
         local function findGun()
             local char = Services_LocalPlayer.Character
             if not char then return nil end
@@ -4227,6 +4257,8 @@ do
         pcall(H.StopOrbit)
         H.Flags.AutoFight = false
         if H.StopAutoFight then pcall(H.StopAutoFight) end
+        H.Flags.AutoFightVoidHide = false
+        if H.StopVoidHide then pcall(H.StopVoidHide) end
         H.Flags.WBAimbotEnabled = false
         if H.WB_CFG and H.WB_CFG.Enabled then pcall(H.WBSetEnabled, false) end
         H.Flags.Optimize = false
@@ -4287,7 +4319,6 @@ do
     Farm.lastSafe = nil
     Farm.returnUntil = 0
 
-    -- ---------- target list (Target 1..5) ----------
     local function farmTargetList()
         local now = tick()
         if now - Farm.lastResolve < 0.5 and #Farm.targets > 0 then return Farm.targets end
@@ -4335,7 +4366,6 @@ do
         Farm.Refresh()
     end
 
-    -- ---------- current target (cycles, KO-pending first) ----------
     local function farmTarget()
         local list = farmTargetList()
         local n = #list
@@ -4374,7 +4404,6 @@ do
         Farm.lastLockAt = 0
     end
 
-    -- ---------- gun ----------
     local function farmGetGun()
         local gun = H.RageFindGun()
         if gun then return gun end
@@ -4395,7 +4424,6 @@ do
         return nil
     end
 
-    -- ---------- cash ----------
     local function farmCash()
         local pf = workspace:FindFirstChild("Players")
         pf = pf and pf:FindFirstChild(LocalPlayer.Name)
@@ -4421,7 +4449,6 @@ do
         return nil
     end
 
-    -- ---------- safety ----------
     local function farmSafeToTP(plr)
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -4453,7 +4480,6 @@ do
         end
     end
 
-    -- ---------- tp + stomp lock ----------
     local function farmEndLock()
         local lock = Farm.lock
         Farm.lock = nil
@@ -4557,7 +4583,6 @@ do
         end
     end
 
-    -- ---------- main tick ----------
     local function farmTick()
         local kill  = H.Flags.FarmKill  == true
         local stomp = H.Flags.FarmStomp == true
@@ -4578,7 +4603,6 @@ do
 
         local ko = H.IsKO(plr)
 
-        -- knocked: tp on top, stomp until the cash lands, then move to the next target
         if ko and stomp then
             if Farm.lock then
                 farmTickLock()
@@ -4602,7 +4626,6 @@ do
 
         if not H.IsAlive(plr) then return end
 
-        -- kill: only while they are standing
         if kill and not ko and not H.HasForceField(plr)
             and now - Farm.lastKill >= FARM_FIRE_RATE then
             local gun = farmGetGun()
@@ -4654,6 +4677,156 @@ do
 
     if H.Flags.FarmKill  == nil then H.Flags.FarmKill  = false end
     if H.Flags.FarmStomp == nil then H.Flags.FarmStomp = false end
+end
+
+do
+    local Players = H.Players
+    local LocalPlayer = H.LocalPlayer
+
+    local MOD_TAGS = {
+        [128081] = "Owner",
+        [128737] = "Mod",
+    }
+    local MOD_IGNORE = { [65039] = true, [8205] = true, [65038] = true, [65037] = true }
+
+    H.ModCfg = { Tags = MOD_TAGS, Ignore = MOD_IGNORE, Interval = 1 }
+    H._modSeen = {}
+    H._modKicking = false
+    if H.Flags.ModAction == nil then H.Flags.ModAction = "Off" end
+
+    local function modAttr(inst, name)
+        if not inst then return nil end
+        local ok, v = pcall(inst.GetAttribute, inst, name)
+        if ok then return v end
+        return nil
+    end
+
+    function H.ModRank(plr)
+        if not plr or plr == LocalPlayer then return nil end
+        local pf = H.Workspace:FindFirstChild("Players")
+        local pm = pf and pf:FindFirstChild(plr.Name)
+        local m = plr.Character
+        local tag = modAttr(m, "TaggedDisplayName")
+        if type(tag) ~= "string" then tag = modAttr(pm, "TaggedDisplayName") end
+        if type(tag) ~= "string" then return nil end
+        local rank, found
+        for block in tag:gmatch("%[.-%]") do
+            for _, code in utf8.codes(block:sub(2, -2)) do
+                if not MOD_IGNORE[code] and MOD_TAGS[code] then
+                    if MOD_TAGS[code] == "Owner" then rank = "Owner" end
+                    if not rank then rank = MOD_TAGS[code] end
+                    found = MOD_TAGS[code]
+                end
+            end
+        end
+        if rank == "Owner" then return "Owner", "Crown" end
+        if rank then return rank, found end
+        return nil
+    end
+
+    function H.ModBanner(rank, who, kick)
+        local parent
+        pcall(function() parent = gethui() end)
+        if not parent then parent = H.CoreGui end
+        local old = parent:FindFirstChild("houhou_modalert")
+        if old then pcall(function() old:Destroy() end) end
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "houhou_modalert"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 1000
+        gui.Parent = parent
+
+        local frame = Instance.new("Frame")
+        frame.AnchorPoint = Vector2.new(0.5, 0)
+        frame.Position = UDim2.new(0.5, 0, 0, -90)
+        frame.Size = UDim2.new(0, 460, 0, 76)
+        frame.BackgroundColor3 = Color3.fromRGB(20, 13, 13)
+        frame.BackgroundTransparency = 0.05
+        frame.BorderSizePixel = 0
+        frame.Parent = gui
+        Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+        local stroke = Instance.new("UIStroke", frame)
+        stroke.Color = Color3.fromRGB(255, 90, 90)
+        stroke.Thickness = 2
+
+        local title = Instance.new("TextLabel", frame)
+        title.Size = UDim2.new(1, -24, 0, 26)
+        title.Position = UDim2.new(0, 12, 0, 8)
+        title.BackgroundTransparency = 1
+        title.Text = kick and "MOD JOINED  -  KICKING" or "MOD JOINED"
+        title.TextColor3 = Color3.fromRGB(255, 110, 110)
+        title.Font = Enum.Font.GothamBold
+        title.TextSize = 20
+        title.TextXAlignment = Enum.TextXAlignment.Left
+
+        local body = Instance.new("TextLabel", frame)
+        body.Size = UDim2.new(1, -24, 0, 30)
+        body.Position = UDim2.new(0, 12, 0, 36)
+        body.BackgroundTransparency = 1
+        body.Text = who .. "  |  " .. rank
+        body.TextColor3 = Color3.fromRGB(238, 238, 248)
+        body.Font = Enum.Font.Gotham
+        body.TextSize = 15
+        body.TextXAlignment = Enum.TextXAlignment.Left
+
+        local TS = game:GetService("TweenService")
+        TS:Create(frame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            Position = UDim2.new(0.5, 0, 0, 28),
+        }):Play()
+
+        task.delay(5, function()
+            if not frame.Parent then return end
+            local out = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            TS:Create(frame, out, { Position = UDim2.new(0.5, 0, 0, -90) }):Play()
+            TS:Create(title, out, { TextTransparency = 1 }):Play()
+            TS:Create(body, out, { TextTransparency = 1 }):Play()
+            TS:Create(stroke, out, { Transparency = 1 }):Play()
+            task.delay(0.45, function()
+                if frame.Parent then frame:Destroy() end
+                if gui.Parent then gui:Destroy() end
+            end)
+        end)
+    end
+
+    function H.ModAlert(plr, rank, tag)
+        local action = H.Flags.ModAction or "Off"
+        if action == "Off" then return end
+        local who = string.format("%s (@%s)", plr.DisplayName, plr.Name)
+        H.ModBanner(rank, who, action == "Kick")
+        if action == "Kick" and not H._modKicking then
+            H._modKicking = true
+            task.delay(2.5, function()
+                pcall(function()
+                    LocalPlayer:Kick(string.format("Mod joined: %s (@%s) [%s]", plr.DisplayName, plr.Name, rank))
+                end)
+            end)
+        end
+    end
+
+    function H.ModScan()
+        if (H.Flags.ModAction or "Off") == "Off" then return end
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then
+                local rank, tag = H.ModRank(plr)
+                if rank and not H._modSeen[plr.UserId] then
+                    H._modSeen[plr.UserId] = true
+                    H.ModAlert(plr, rank, tag)
+                end
+            end
+        end
+    end
+
+    local lastScan = 0
+    H.AddConn(H.RunService.Heartbeat:Connect(function()
+        local now = tick()
+        if now - lastScan < (H.ModCfg.Interval or 1) then return end
+        lastScan = now
+        H.ModScan()
+    end))
+
+    H.AddConn(Players.PlayerRemoving:Connect(function(p) H._modSeen[p.UserId] = nil end))
 end
 
 do
@@ -4752,6 +4925,70 @@ do
         local fightGen = 0
         local fightHome
 
+        if H_.Flags.AutoFightCanFire == nil then H_.Flags.AutoFightCanFire = false end
+
+        -- ================= Void Hide =================
+        if H_.Flags.AutoFightVoidHide == nil then H_.Flags.AutoFightVoidHide = false end
+        if H_.Flags.AutoFightVoidHideInterval == nil then H_.Flags.AutoFightVoidHideInterval = 1000 end
+
+        H_.VoidHideSavedCF = nil
+        H_.VoidHidePhase = "rest"
+        H_.VoidHideLast = 0
+        H_.VoidHideRunning = false
+        H_.VoidHideConn = nil
+
+        local VOID_HIDE_MAX = { speed = 300000, height = 150000, radius = 25000 }
+
+        local function voidHideRestore()
+            local hrp = H_.GetHRP()
+            if hrp and H_.VoidHideSavedCF then
+                pcall(function()
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                    hrp.CFrame = H_.VoidHideSavedCF
+                end)
+            end
+        end
+
+        function H_.StopVoidHide()
+            H_.VoidHideRunning = false
+            H_.VoidHidePhase = "rest"
+            if H_.VoidHideConn then H_.VoidHideConn:Disconnect() H_.VoidHideConn = nil end
+            if H_.VoidLoopRunning then pcall(H_.StopVoidLoop) end
+            voidHideRestore()
+            H_.VoidHideSavedCF = nil
+        end
+
+        function H_.StartVoidHide()
+            H_.StopVoidHide()
+            H_.VoidHideRunning = true
+            H_.VoidHidePhase = "rest"
+            H_.VoidHideLast = tick()
+            H_.VoidHideConn = H_.RunService.Heartbeat:Connect(function()
+                if not H_.VoidHideRunning or not H_.Flags.AutoFightVoidHide then return end
+                local hrp = H_.GetHRP()
+                if not hrp or not hrp.Parent then return end
+                local interval = (H_.Flags.AutoFightVoidHideInterval or 1000) / 1000
+                if interval < 0.05 then interval = 0.05 end
+                local now = tick()
+                if now - H_.VoidHideLast < interval then return end
+                H_.VoidHideLast = now
+                if H_.VoidHidePhase == "rest" then
+                    H_.VoidHideSavedCF = hrp.CFrame
+                    H_.VoidLoopCFG.speed = VOID_HIDE_MAX.speed
+                    H_.VoidLoopCFG.height = VOID_HIDE_MAX.height
+                    H_.VoidLoopCFG.radius = VOID_HIDE_MAX.radius
+                    pcall(H_.StartVoidLoop)
+                    H_.VoidHidePhase = "void"
+                else
+                    pcall(H_.StopVoidLoop)
+                    voidHideRestore()
+                    H_.VoidHidePhase = "rest"
+                end
+            end)
+        end
+        -- =============================================
+
         local function fightSetPlatform(on)
             local hum = H_.GetHum()
             if hum then pcall(function()
@@ -4763,6 +5000,7 @@ do
 
         function H_.StopAutoFight()
             fightGen = fightGen + 1
+            H_.Flags.AutoFightCanFire = false
             H_.followRedirectPart = nil
             local hrp = H_.GetHRP()
             if hrp and fightHome then
@@ -4862,7 +5100,7 @@ do
                     local rs = game:GetService("ReplicatedStorage")
                     H_.MainRemote = (rs:FindFirstChild("MainRemotes") and rs.MainRemotes:FindFirstChild("MainRemoteEvent")) or rs:FindFirstChild("MainRemoteEvent", true)
                 end
-                if H_.MainRemote then pcall(function() H_.MainRemote:FireServer("ChangeSettings", "AutoReload", true) end) end
+                if H_.MainRemote then pcall(function() H_.MainRemote:FireServer("ChangeSettings", "AutoReload", false) end) end
                 fightHome = home
 
                 local function isReady(tgt)
@@ -4932,11 +5170,6 @@ do
                     local stats = H_.RageGetWeaponStats(gun)
                     local origin = handle.Position
                     local dir = (aimPos - origin).Unit
-                    local ammo = gun:FindFirstChild("Ammo")
-                    if ammo and ammo.Value <= 0 then
-                        H_.TriggerReloadTool(gun)
-                        return false
-                    end
                     local ok = pcall(function()
                         if H_.RageIsShotgun(gun) then
                             local pellets = {}
@@ -4949,13 +5182,20 @@ do
                             H_.MainRemote:FireServer("ShootGun", handle, origin, nil, aimPos, hitbox, dir, stats.range, stats.damage, result1, nil)
                         end
                     end)
-                    if ok then H_.TriggerReloadTool(gun) end
                     return ok
                 end
 
                 charConn = LocalPlayer.CharacterAdded:Connect(function()
                     if fightGen ~= gen then return end
                     task.spawn(function()
+                        local c = LocalPlayer.Character
+                        if c then
+                            local t0 = tick()
+                            while fightGen == gen and H_.Flags.AutoFight
+                                and not c:FindFirstChild("HumanoidRootPart") and tick() - t0 < 1 do
+                                RS.Heartbeat:Wait()
+                            end
+                        end
                         task.wait(0.03)
                         if fightGen ~= gen then return end
                         equipNextGun()
@@ -4966,6 +5206,7 @@ do
 
                 while fightGen == gen and H_.Flags.AutoFight do
                     fightSetPlatform(false)
+                    H_.Flags.AutoFightCanFire = false
                     local target = fightPickTarget() or fightPickAny()
                     if not target then
                         RS.Heartbeat:Wait()
@@ -4993,6 +5234,7 @@ do
                             RS.Heartbeat:Wait()
                         end
 
+                        H_.Flags.AutoFightCanFire = true
                         local deadline = tick() + 8
                         while fightGen == gen and H_.Flags.AutoFight and tick() < deadline do
                             if not target.Parent or not isReady(target) then break end
@@ -5219,6 +5461,16 @@ do
         })
         if H_.Flags.AutoFightRespawnDelay == nil then H_.Flags.AutoFightRespawnDelay = 1000 end
         FightSec:Slider({ Name = "Alive Time (ms)", Flag = "AFRespawnDelay", Min = 0, Max = 15000, Default = 1000, Callback = function(v) H_.Flags.AutoFightRespawnDelay = v end })
+        FightSec:Toggle({
+            Name = "Void Hide",
+            Flag = "AutoFightVoidHide",
+            Default = false,
+            Callback = function(v)
+                H_.Flags.AutoFightVoidHide = v
+                if v then H_.StartVoidHide() else H_.StopVoidHide() end
+            end,
+        })
+        FightSec:Slider({ Name = "Void Hide Interval (ms)", Flag = "AutoFightVoidHideInterval", Min = 50, Max = 10000, Default = 1000, Callback = function(v) H_.Flags.AutoFightVoidHideInterval = v end })
         FightSec:Toggle({
             Name = "Free Roam (puppet)",
             Flag = "FreeRoam",
@@ -7113,6 +7365,29 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
         HitboxSection:Slider({ Name = "Hitbox Size", Flag = "HitboxSize", Min = 5, Max = 25, Default = 6, Callback = function(v) H_.Flags.HitboxSize = v end })
         HitboxSection:Slider({ Name = "Transparency", Flag = "HitboxTransparency", Min = 0, Max = 100, Default = 50, Callback = function(v) H_.Flags.HitboxTransparency = v end })
 
+        local ModSection = MiscTab:Section({ Name = "Mod Detection", Side = "Right" })
+        ModSection:Dropdown({
+            Name = "On Mod Join",
+            Flag = "ModAction",
+            Values = {"Off", "Warn", "Kick"},
+            Default = "Off",
+            Callback = function(v)
+                if type(v) == "table" then v = v[1] end
+                H_.Flags.ModAction = v
+                if v ~= "Off" then
+                    H_._modSeen = {}
+                    H_._modKicking = false
+                    task.defer(H_.ModScan)
+                end
+            end,
+        })
+        ModSection:Button({ Name = "Scan Now", Callback = function()
+            H_._modSeen = {}
+            H_._modKicking = false
+            task.defer(H_.ModScan)
+        end })
+        ModSection:Paragraph({ Title = "Info", Content = "Warn = on-screen alert. Kick = you get kicked, the kick reason shows the mod's name." })
+
         MiscSection:Button({
             Name = "Respawn",
             Callback = function()
@@ -7249,6 +7524,7 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
                     pcall(function() H_.RunService:UnbindFromRenderStep("houhouAimbot") end)
                     H_.StopFly()
                     H_.StopSpeedLoop()
+                    if H_.StopVoidHide then pcall(H_.StopVoidHide) end
                     H_.StopVoidLoop()
                     H_.StopOrbit()
                     if H_.Farm then pcall(H_.Farm.Disable) end
@@ -8821,7 +9097,7 @@ do
                 elseif not H.IsAlive(plr) or not H.RageIsFullyLoaded(plr) then
                     H.RageWaitingRespawn[plr] = true
                     H.RageTargetReady[plr] = false
-                elseif H.HasForceField(plr) then
+                elseif H.Flags.RageWaitFF ~= false and H.HasForceField(plr) then
                     H.RageWaitingRespawn[plr] = true
                     H.RageTargetReady[plr] = false
                 else
@@ -8834,7 +9110,7 @@ do
                                 and captured.Parent
                                 and H.RageIsFullyLoaded(captured)
                                 and H.IsAlive(captured)
-                                and not H.HasForceField(captured)
+                                and (H.Flags.RageWaitFF == false or not H.HasForceField(captured))
                             then
                                 H.RageTargetReady[captured] = true
                             end
@@ -8880,7 +9156,7 @@ do
 
         for plr, _ in pairs(H.RageTargets) do
             if plr and plr.Parent and plr ~= LocalPlayer then
-                if H.IsKO(plr) then
+                if H.RageConfirmedDown(plr) then
                     H.RageTryTP(plr)
                     H.RageTryStomp(plr)
                 end
