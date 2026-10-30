@@ -237,9 +237,9 @@ do
     end
 
     function H.SnapPlayers()
-        local p = H.Players:GetPlayers()
-        H._snap = p
-        return p
+        local ok, p = pcall(function() return H.Players:GetPlayers() end)
+        if ok and type(p) == "table" then H._snap = p end
+        return H._snap or {}
     end
 
     function H.AddConn(c)
@@ -432,13 +432,30 @@ do
     function H.GetMousePos() return UserInputService:GetMouseLocation() end
 
     function H.resolvePlayer(flagVal)
-        if typeof(flagVal) == "Instance" and flagVal:IsA("Player") then return flagVal end
-        if type(flagVal) == "string" then
-            local direct = Players:FindFirstChild(flagVal)
-            if direct then return direct end
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p.Name == flagVal or p.DisplayName == flagVal then return p end
-            end
+        if typeof(flagVal) == "Instance" then
+            return flagVal:IsA("Player") and flagVal or nil
+        end
+        if type(flagVal) == "table" then
+            local inner = flagVal[1] or flagVal.value or flagVal.Name
+            if typeof(inner) == "Instance" and inner:IsA("Player") then return inner end
+            flagVal = inner
+        end
+        if type(flagVal) ~= "string" or flagVal == "" then return nil end
+
+        local ps = Players
+        if not ps then
+            local okS, svc = pcall(function() return game:GetService("Players") end)
+            ps = okS and svc or nil
+        end
+        if not ps then return nil end
+
+        local okD, direct = pcall(function() return ps:FindFirstChild(flagVal) end)
+        if okD and direct and direct:IsA("Player") then return direct end
+
+        local okL, list = pcall(function() return ps:GetPlayers() end)
+        if not okL or type(list) ~= "table" then return nil end
+        for _, p in ipairs(list) do
+            if p.Name == flagVal or p.DisplayName == flagVal then return p end
         end
         return nil
     end
@@ -1900,10 +1917,13 @@ do
     end
 
     H.FlyConn = nil
-    H.flyVelocityMock = Vector3.new(0, 0.03, 0)
+    H.FlyPos = nil
+    H.FlyVel = Vector3.zero
 
     function H.StopFly()
         H.FlyActive = false
+        H.FlyPos = nil
+        H.FlyVel = Vector3.zero
         if H.FlyConn then H.FlyConn:Disconnect() H.FlyConn = nil end
         local char = LocalPlayer.Character
         if char then
@@ -1927,22 +1947,35 @@ do
 
     function H.StartFly()
         if H.FlyConn then H.FlyConn:Disconnect() H.FlyConn = nil end
-        H.FlyActive = true
+
         local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then pcall(function() hum.PlatformStand = true end) end
-        end
-        H.FlyConn = RunService.RenderStepped:Connect(function()
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return end
+
+        H.FlyPos = hrp.Position
+        H.FlyVel = Vector3.zero
+
+        H.FlyActive = true
+        pcall(function() hum.PlatformStand = true end)
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        H.FlyConn = RunService.RenderStepped:Connect(function(dt)
             if not H.Flags.FlyEnabled then return end
             local char = LocalPlayer.Character
             if not char then return end
             local hrp = char:FindFirstChild("HumanoidRootPart")
-            if not hrp then return end
+            if not hrp or not H.FlyPos then return end
             local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                if not hum.PlatformStand then hum.PlatformStand = true end
-            end
+            if hum and not hum.PlatformStand then pcall(function() hum.PlatformStand = true end) end
+
+            dt = math.clamp(dt, 0, 0.1)
+
             local moveDir = Vector3.zero
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + Camera.CFrame.LookVector end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - Camera.CFrame.LookVector end
@@ -1950,11 +1983,17 @@ do
             if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + Camera.CFrame.RightVector end
             if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
             if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then moveDir = moveDir - Vector3.new(0, 1, 0) end
-            local speed = (H.Flags.FlySpeed or 5) * 2
-            if moveDir.Magnitude > 0 then
-                hrp.CFrame = hrp.CFrame + (moveDir.Unit * (speed / 5))
-            end
-            hrp.Velocity = H.flyVelocityMock
+            if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
+
+            local speed = (H.Flags.FlySpeed or 5) * 10
+            H.FlyVel = H.FlyVel:Lerp(moveDir * speed, math.clamp(dt * 12, 0, 1))
+            H.FlyPos = H.FlyPos + H.FlyVel * dt
+
+            pcall(function()
+                hrp.CFrame = CFrame.new(H.FlyPos) * (hrp.CFrame - hrp.CFrame.Position)
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end)
         end)
     end
 
@@ -2082,22 +2121,22 @@ do
         return Vector3.new(px, py, pz)
     end
 
-    function H.StopVoidLoop()
+    function H.StopVoidLoop(restorePos)
+        local wasRunning = H.VoidLoopRunning
         H.VoidLoopRunning = false
         H.VoidLoopCFG.active = false
         if H.VoidLoopConn then H.VoidLoopConn:Disconnect() H.VoidLoopConn = nil end
-        if H.VoidLoopSavedPos then
-            local hrp = H.GetHRP()
-            if hrp then
-                pcall(function()
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.AssemblyAngularVelocity = Vector3.zero
-                    hrp.CFrame = H.VoidLoopSavedPos
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.AssemblyAngularVelocity = Vector3.zero
-                end)
-            end
+        local hrp = H.GetHRP()
+        if restorePos ~= false and wasRunning and H.VoidLoopSavedPos and hrp then
+            pcall(function()
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+                hrp.CFrame = H.VoidLoopSavedPos
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end)
         end
+        H.VoidLoopSavedPos = nil
         local hum = H.GetHum()
         if hum then
             pcall(function()
@@ -3713,9 +3752,9 @@ do
         local newList = {}
         for i = 1, CFG.MAX_RAGE_TARGETS do
             local v = H.Flags["RageTarget" .. i]
-            if v then
+            if v ~= nil and v ~= "" then
                 local plr = H.resolvePlayer(v)
-                if plr and plr ~= LocalPlayer then newList[plr] = true end
+                if plr and plr.Parent and plr ~= LocalPlayer then newList[plr] = true end
             end
         end
         local toRemove = {}
@@ -4858,7 +4897,6 @@ do
         AimbotSection:Dropdown({ Name = "Hit Part", Flag = "AimbotHitPart", Values = {"Head", "HumanoidRootPart", "Closest"}, Default = "Head", Callback = function(v) H_.Flags.AimbotHitPart = v end })
         AimbotSection:Dropdown({ Name = "Target Method", Flag = "AimbotMethod", Values = {"Closest to Mouse", "Closest Distance", "FOV"}, Default = "Closest to Mouse", Callback = function(v) H_.Flags.AimbotMethod = v end })
         AimbotSection:Toggle({ Name = "Sticky Aim", Flag = "AimbotStickyAim", Default = false, Callback = function(v) H_.Flags.AimbotStickyAim = v end })
-        AimbotSection:Toggle({ Name = "Unlock on Death", Flag = "AimbotUnlockOnDeath", Default = true, Callback = function(v) H_.Flags.AimbotUnlockOnDeath = v end })
         AimbotSection:Toggle({ Name = "Unlock on Kill", Flag = "AimbotUnlockOnKill", Default = false, Callback = function(v) H_.Flags.AimbotUnlockOnKill = v if v then H_.AimbotLockChar = nil H_.Target = nil end end })
         AimbotSection:Toggle({ Name = "Prediction", Flag = "AimbotPrediction", Default = false, Callback = function(v) H_.Flags.AimbotPrediction = v end })
         AimbotSection:Slider({ Name = "Prediction Value", Flag = "AimbotPredictionValue", Min = 0, Max = 100, Default = 16, Callback = function(v) H_.Flags.AimbotPredictionValue = v end })
@@ -4927,7 +4965,7 @@ do
 
         if H_.Flags.AutoFightCanFire == nil then H_.Flags.AutoFightCanFire = false end
 
-        -- ================= Void Hide =================
+
         if H_.Flags.AutoFightVoidHide == nil then H_.Flags.AutoFightVoidHide = false end
         if H_.Flags.AutoFightVoidHideInterval == nil then H_.Flags.AutoFightVoidHideInterval = 1000 end
 
@@ -4987,7 +5025,7 @@ do
                 end
             end)
         end
-        -- =============================================
+
 
         local function fightSetPlatform(on)
             local hum = H_.GetHum()
@@ -6402,7 +6440,7 @@ do
                 H_.Flags.FlyEnabled = v
                 if v then
                     H_.Flags.VoidLoop = false
-                    H_.StopVoidLoop()
+                    H_.StopVoidLoop(false)
                     H_.StartFly()
                 else
                     H_.StopFly()
@@ -9071,6 +9109,7 @@ do
     end)
 
     H.AddConn(RunService.Heartbeat:Connect(function()
+        local hbOk, hbErr = pcall(function()
         H.SnapPlayers()
         pcall(H.UpdateFOVCircle)
         pcall(H.UpdateSilentFOVCircle)
@@ -9237,6 +9276,8 @@ do
                 end)
             end
         end
+        end)
+        if not hbOk then warn("[houhou] heartbeat: " .. tostring(hbErr)) end
     end))
 
     RunService.RenderStepped:Connect(function()
