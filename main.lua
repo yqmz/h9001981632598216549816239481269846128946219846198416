@@ -6,6 +6,7 @@ do
 
     setthreadidentity(2)
 
+    local scanned = 0
     for i, v in getgc(true) do
         if typeof(v) == "table" then
             local DetectFunc = rawget(v, "Detected")
@@ -20,7 +21,10 @@ do
                 hookfunction(Kill, function(Info) end)
                 table.insert(Hooked, Kill)
             end
+            if Detected and Kill then break end
         end
+        scanned = scanned + 1
+        if scanned % 2000 == 0 then task.wait() end
     end
 
     local Old = hookfunction(getrenv().debug.info, newcclosure(function(...)
@@ -88,6 +92,11 @@ do
     H.RapidFireLast   = 0
     H.RapidFireDone   = {}
     H.RapidFireConns  = {}
+    H._rfPending      = false
+    H.BOOT_DONE       = false
+    H.RapidFireConn   = nil
+    H.RapidFireAccum  = 0
+    H.RapidFireLastSync = 0
     H.AutoStompLast   = {}
     H.MainRemote      = nil
     H.FlyActive       = false
@@ -168,6 +177,9 @@ do
         SENTRY_RADIUS = 150,
         SENTRY_FIRE_RATE = 0.02,
         SENTRY_LOCK_TIME = 15,
+        RAPID_FIRE_INTERVAL        = 0.015,
+        RAPID_FIRE_MAX_PER_FRAME   = 4,
+        RAPID_FIRE_COOLDOWN_SYNC   = 0.08,
         ARC_SEGS = 24,
         ARC_STRANDS = 4,
         ARC_DROP = 0.38,
@@ -265,7 +277,7 @@ do
 
     function H.SafeCall(fn, ...)
         local ok, err = pcall(fn, ...)
-        if not ok then warn("[houhou] " .. tostring(err)) end
+        
         return ok, err
     end
 
@@ -382,7 +394,7 @@ do
             if not cur then return end
             cur.phase = "shield"
             cur.armedAt = tick()
-            if H.FFDebug then print(("[houhou] ff %s SHIELD"):format(plr.Name)) end
+            
         end)
         char.ChildRemoved:Connect(function(d)
             if d.ClassName ~= "ForceField" then return end
@@ -390,7 +402,7 @@ do
             if not cur then return end
             cur.phase = "clear"
             cur.clearedAt = tick()
-            if H.FFDebug then print(("[houhou] ff %s CLEAR"):format(plr.Name)) end
+            
         end)
     end
 
@@ -459,15 +471,7 @@ do
     end
 
     function H.HasForceField(plr)
-        local held = H._ffEval(plr)
-        if H.FFDebug and plr then
-            local prev = H._ffState[plr]
-            if prev ~= held then
-                H._ffState[plr] = held
-                print(("[houhou] ff %s -> %s"):format(plr.Name, tostring(held)))
-            end
-        end
-        return held
+        return H._ffEval(plr)
     end
 
     function H.GetTargetPart(plr, partName)
@@ -2749,54 +2753,53 @@ do
         return true
     end
 
+    H._coolCache = setmetatable({}, { __mode = "k" })
+
     function H.ZeroCooldown(tool)
         if not tool then return end
-        for _, v in ipairs(tool:GetDescendants()) do
-            if v:IsA("NumberValue") or v:IsA("IntValue") then
-                local n = string.lower(v.Name)
-                if n:find("cool") or n:find("delay") or n:find("rate") or n:find("shoot") or n:find("debounce") then
-                    pcall(function() v.Value = 0 end)
-                end
-            end
-            if v:IsA("BoolValue") then
-                local n = string.lower(v.Name)
-                if n:find("cool") or n:find("debounce") then
-                    pcall(function() v.Value = false end)
-                end
-            end
-        end
-        pcall(function()
-            if tool:GetAttribute("Cooldown") ~= nil then tool:SetAttribute("Cooldown", nil) end
-            if tool:GetAttribute("ShootingCooldown") ~= nil then tool:SetAttribute("ShootingCooldown", 0) end
-        end)
-    end
-
-    function H.PatchConnections(tool)
-        if typeof(getconnections) ~= "function" then return end
-        pcall(function()
-            for _, conn in ipairs(getconnections(tool.Activated)) do
-                local fn = conn.Function
-                if fn and debug and debug.getupvalue and debug.setupvalue then
-                    local info = debug.getinfo(fn)
-                    local nups = (info and info.nups) or 0
-                    for i = 1, nups do
-                        local val = debug.getupvalue(fn, i)
-                        if type(val) == "number" and val > 0 and val < 1 then
-                            debug.setupvalue(fn, i, 0)
-                        end
+        local cache = H._coolCache[tool]
+        if not cache then
+            cache = { nums = {}, bools = {} }
+            for _, v in ipairs(tool:GetDescendants()) do
+                if v:IsA("NumberValue") or v:IsA("IntValue") then
+                    local n = string.lower(v.Name)
+                    if n:find("cool") or n:find("delay") or n:find("rate") or n:find("shoot") or n:find("debounce") then
+                        cache.nums[#cache.nums + 1] = v
+                    end
+                elseif v:IsA("BoolValue") then
+                    local n = string.lower(v.Name)
+                    if n:find("cool") or n:find("debounce") then
+                        cache.bools[#cache.bools + 1] = v
                     end
                 end
             end
-        end)
+            H._coolCache[tool] = cache
+        end
+        for i = 1, #cache.nums do
+            local v = cache.nums[i]
+            if v.Parent and v.Value ~= 0 then pcall(function() v.Value = 0 end) end
+        end
+        for i = 1, #cache.bools do
+            local v = cache.bools[i]
+            if v.Parent and v.Value then pcall(function() v.Value = false end) end
+        end
+        if tool:GetAttribute("Cooldown") ~= nil then pcall(function() tool:SetAttribute("Cooldown", nil) end) end
+        if tool:GetAttribute("ShootingCooldown") ~= 0 then pcall(function() tool:SetAttribute("ShootingCooldown", 0) end) end
+    end
+
+    function H.PatchConnections(tool)
+        return
     end
 
     function H.HardenTool(tool)
         if not tool or H.RapidFireDone[tool] then return end
         if not H.IsWeapon(tool) then return end
         H.ZeroCooldown(tool)
-        H.PatchConnections(tool)
         H.RapidFireDone[tool] = true
-        local conn = tool.DescendantAdded:Connect(function() H.ZeroCooldown(tool) end)
+        local conn = tool.DescendantAdded:Connect(function()
+            H._coolCache[tool] = nil
+            H.ZeroCooldown(tool)
+        end)
         table.insert(H.RapidFireConns, conn)
     end
 
@@ -2805,12 +2808,18 @@ do
         local bp = LocalPlayer:FindFirstChild("Backpack")
         if char then
             for _, t in ipairs(char:GetChildren()) do
-                if t:IsA("Tool") then H.HardenTool(t) end
+                if t:IsA("Tool") then
+                    H.HardenTool(t)
+                    task.wait(0.02)
+                end
             end
         end
         if bp then
             for _, t in ipairs(bp:GetChildren()) do
-                if t:IsA("Tool") then H.HardenTool(t) end
+                if t:IsA("Tool") then
+                    H.HardenTool(t)
+                    task.wait(0.02)
+                end
             end
         end
     end
@@ -2824,26 +2833,84 @@ do
         return nil
     end
 
+    function H.RapidFireStop()
+        if H.RF_WatchConn then
+            pcall(function() H.RF_WatchConn:Disconnect() end)
+            H.RF_WatchConn = nil
+        end
+        if H.RapidFireConn then
+            pcall(function() H.RapidFireConn:Disconnect() end)
+            H.RapidFireConn = nil
+        end
+        H.RapidFireAccum = 0
+        H.RapidFireLastSync = 0
+    end
+
+    function H.RapidFireTick(dt)
+        if not H.Flags.RapidFire then return end
+        if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+            H.RapidFireAccum = 0
+            return
+        end
+        if not H.IsAlive(LocalPlayer) then return end
+
+        local tool = H.GetEquippedWeapon()
+        if not tool or tool.Parent ~= LocalPlayer.Character or not tool:FindFirstChild("Handle") then
+            H.RapidFireAccum = 0
+            return
+        end
+
+        H.HardenTool(tool)
+
+        local now = tick()
+        if now - H.RapidFireLastSync >= H.CFG.RAPID_FIRE_COOLDOWN_SYNC then
+            H.RapidFireLastSync = now
+            H.ZeroCooldown(tool)
+        end
+
+        H.RapidFireAccum = math.min(H.RapidFireAccum + math.min(dt, 0.05), 0.06)
+
+        local interval = H.CFG.RAPID_FIRE_INTERVAL
+        local fired = 0
+        while H.RapidFireAccum >= interval and fired < H.CFG.RAPID_FIRE_MAX_PER_FRAME do
+            H.RapidFireAccum = H.RapidFireAccum - interval
+            fired = fired + 1
+            pcall(function() tool:Activate() end)
+        end
+    end
+
+    function H.RFWatch()
+        if H.RF_WatchConn then H.RF_WatchConn:Disconnect() H.RF_WatchConn = nil end
+        H.RF_WatchLast = 0
+        H.RF_WatchConn = RunService.Heartbeat:Connect(function()
+            if not H.Flags.RapidFire then return end
+            local now = tick()
+            if now - H.RF_WatchLast < 1 then return end
+            H.RF_WatchLast = now
+            task.spawn(H.ScanRapidFireTools)
+        end)
+    end
+
+    function H.RapidFireStart()
+        H.RapidFireStop()
+        task.spawn(H.ScanRapidFireTools)
+        H.RFWatch()
+        H.RapidFireConn = RunService.Heartbeat:Connect(function(dt)
+            pcall(H.RapidFireTick, dt)
+        end)
+    end
+
     function H.CleanupRapidFire()
+        H.RapidFireStop()
         for _, c in ipairs(H.RapidFireConns) do pcall(function() c:Disconnect() end) end
         H.RapidFireConns = {}
         H.RapidFireDone = {}
+        H._coolCache = setmetatable({}, { __mode = "k" })
     end
 
     H._rfDirty = true
 
-    function H.UpdateRapidFire()
-        if not H.Flags.RapidFire then return end
-        if H._rfDirty then H._rfDirty = false H.ScanRapidFireTools() end
-        if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then return end
-        if tick() - H.RapidFireLast < 0.015 then return end
-        local tool = H.GetEquippedWeapon()
-        if not tool then return end
-        H.HardenTool(tool)
-        H.ZeroCooldown(tool)
-        H.RapidFireLast = tick()
-        pcall(function() tool:Activate() end)
-    end
+    
 
     function H.GetTargetUnderMouse()
         local target = H.Mouse.Target
@@ -3314,7 +3381,7 @@ do
                 if not e.paid and e.at and (cash - e.at) >= (H.CFG.RAGE_CASH_MIN or 100000) then
                     e.paid = true
                     e.paidAt = now
-                    if H.StompDebug then print(("[houhou] %s paid +%d"):format(plr.Name, math.floor(cash - e.at))) end
+                    
                 end
             end
         end)
@@ -3339,13 +3406,13 @@ do
         if cash and e.at and (cash - e.at) >= (H.CFG.RAGE_CASH_MIN or 100000) then
             e.paid = true
             e.paidAt = now
-            if H.StompDebug then print(("[houhou] %s paid +%d"):format(plr.Name, math.floor(cash - e.at))) end
+            
             return true
         end
         if now - e.first >= (H.CFG.RAGE_CASH_TIMEOUT or 2.5) then
             e.paid = true
             e.paidAt = now
-            if H.StompDebug then print(("[houhou] %s stomp timeout"):format(plr.Name)) end
+            
             return true
         end
         return false
@@ -3477,7 +3544,7 @@ do
 
         task.delay(0.06, function()
             local av, am = H.GetToolAmmo(gun)
-            if H.AmmoDebug then print(("[houhou] %s ammo %s/%s"):format(gun.Name, tostring(av), tostring(am))) end
+            
             if H.NeedsReload(gun) then H.TriggerReloadTool(gun) end
         end)
         return ok
@@ -3545,7 +3612,7 @@ do
 
         task.delay(0.06, function()
             local av, am = H.GetToolAmmo(gun)
-            if H.AmmoDebug then print(("[houhou] %s ammo %s/%s"):format(gun.Name, tostring(av), tostring(am))) end
+            
             if av ~= nil and av <= 0 then H.TriggerReloadTool(gun) end
         end)
         task.delay(0.15, function()
@@ -4262,7 +4329,7 @@ end
             local ok = fireGun(gun, hitbox, gun.Handle.Position, aimPos)
             task.delay(0.06, function()
                 local av, am = H.GetToolAmmo(gun)
-                if H.AmmoDebug then print(("[houhou] %s ammo %s/%s"):format(gun.Name, tostring(av), tostring(am))) end
+                
                 if av ~= nil and av <= 0 then H.TriggerReloadTool(gun) end
             end)
             return ok
@@ -4606,7 +4673,7 @@ do
                 if not e.paid and e.at and (cash - e.at) >= (H.CFG.RAGE_CASH_MIN or 100000) then
                     e.paid = true
                     e.paidAt = now
-                    if H.StompDebug then print(("[houhou] %s paid +%d"):format(plr.Name, math.floor(cash - e.at))) end
+                    
                 end
             end
         end)
@@ -7671,7 +7738,11 @@ local lastHealth, lastArmor, lastDamageAt, stimPending, lastKeep = nil, nil, 0, 
         end })
         MiscSection:Toggle({ Name = "Rapid Fire", Flag = "RapidFire", Default = false, Callback = function(v)
             H_.Flags.RapidFire = v
-            if not v then H_.CleanupRapidFire() else H_.ScanRapidFireTools() end
+            if not H_.BOOT_DONE then
+                H_._rfPending = v
+                return
+            end
+            if v then H_.RapidFireStart() else H_.CleanupRapidFire() end
         end })
 
         local HitboxSection = MiscTab:Section("Hitbox Expander")
@@ -9399,7 +9470,7 @@ do
         pcall(H.UpdateSkeleton)
         pcall(H.UpdateESP)
         pcall(H.CheckESPHealth)
-        pcall(H.UpdateRapidFire)
+        
         pcall(H.UpdateTriggerBot)
         pcall(H.SilentScan)
         pcall(H.DoAutoStomp)
@@ -9562,7 +9633,7 @@ do
             end
         end
         end)
-        if not hbOk then warn("[houhou] heartbeat: " .. tostring(hbErr)) end
+        
     end))
 
     RunService.RenderStepped:Connect(function()
@@ -9646,7 +9717,7 @@ do
         end
     end))
 
-    H.AddConn(LocalPlayer.CharacterAdded:Connect(function()
+    H.AddConn(LocalPlayer.CharacterAdded:Connect(function(char)
         H.Target = nil
         H.SilentCachedPart = nil
         H.RageTPQueue = nil
@@ -9689,22 +9760,53 @@ do
         end)
     end
 
+    local function hookBackpack(bp)
+        if not bp or bp:GetAttribute("houhouHooked") then return end
+        bp:SetAttribute("houhouHooked", true)
+        H.AddConn(bp.ChildAdded:Connect(function(t)
+            H._rfDirty = true
+            H.InvalidateSentryGuns()
+            if t:IsA("Tool") then pcall(H.GetToolAmmo, t) end
+            if t:IsA("Tool") and H.Flags.RapidFire then H.HardenTool(t) end
+        end))
+        H.AddConn(bp.ChildRemoved:Connect(function()
+            H._rfDirty = true
+            H.InvalidateSentryGuns()
+        end))
+    end
+
+    hookBackpack(LocalPlayer:FindFirstChildOfClass("Backpack"))
     H.AddConn(LocalPlayer.ChildAdded:Connect(function(c)
         if c.Name == "Backpack" then
             H._rfDirty = true
             H.InvalidateSentryGuns()
-            H.AddConn(c.ChildAdded:Connect(function(t)
-                H._rfDirty = true
-                H.InvalidateSentryGuns()
-                if t:IsA("Tool") then pcall(H.GetToolAmmo, t) end
-                if t:IsA("Tool") and H.Flags.RapidFire then H.HardenTool(t) end
-            end))
-            H.AddConn(c.ChildRemoved:Connect(function()
-                H._rfDirty = true
-                H.InvalidateSentryGuns()
-            end))
+            hookBackpack(c)
         end
     end))
+
+    local function hookCharTools(char)
+        if not char or char:GetAttribute("houhouHooked") then return end
+        char:SetAttribute("houhouHooked", true)
+        H.AddConn(char.ChildAdded:Connect(function(t)
+            if t:IsA("Tool") and H.Flags.RapidFire then H.HardenTool(t) end
+        end))
+    end
+    hookCharTools(LocalPlayer.Character)
+    H.AddConn(LocalPlayer.CharacterAdded:Connect(hookCharTools))
+
+    task.delay(1.5, function()
+        H.BOOT_DONE = true
+        H._rfPending = false
+        if H.Flags.RapidFire then
+            pcall(H.RapidFireStart)
+        end
+    end)
+
+    task.delay(4, function()
+        if H.Flags.RapidFire and not H.RapidFireConn then
+            pcall(H.RapidFireStart)
+        end
+    end)
 
     task.delay(2, function()
         pcall(function()
