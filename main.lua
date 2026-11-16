@@ -160,7 +160,9 @@ do
         M1_FIRE_RATE = 0.08,
         M2_FIRE_RATE = 0.05,
         MAX_RAGE_TARGETS = 3,
-        FF_CLEAR_DELAY = 0.12,
+        FF_CLEAR_DELAY = 0.03,
+        RAGE_CASH_MIN = 100000,
+        RAGE_CASH_TIMEOUT = 1.2,
         SENTRY_Y = 900,
         SENTRY_UP = 45,
         SENTRY_RADIUS = 150,
@@ -359,10 +361,37 @@ do
 
     H._ffCache = {}
 
-    H.SPAWN_SHIELD = 1.0
+    H.FF_WAIT = 0.5
+    H.FF_LOAD_MAX = 6
+    H.FF_TAIL = 1.4
+    H.FFDebug = false
+    H._ffState = {}
+    H._ffTrueFlags = { "Protection", "Shield", "SpawnProtection", "SpawnShield" }
 
     local function markSpawn(plr, char)
-        if plr and char then H._ffCache[plr] = { t = tick(), char = char } end
+        if not plr or not char then return end
+        local e = { t = tick(), char = char, phase = "wait" }
+        H._ffCache[plr] = e
+        if char:FindFirstChildOfClass("ForceField") then
+            e.phase = "shield"
+            e.armedAt = tick()
+        end
+        char.ChildAdded:Connect(function(d)
+            if d.ClassName ~= "ForceField" then return end
+            local cur = H._ffCache[plr]
+            if not cur then return end
+            cur.phase = "shield"
+            cur.armedAt = tick()
+            if H.FFDebug then print(("[houhou] ff %s SHIELD"):format(plr.Name)) end
+        end)
+        char.ChildRemoved:Connect(function(d)
+            if d.ClassName ~= "ForceField" then return end
+            local cur = H._ffCache[plr]
+            if not cur then return end
+            cur.phase = "clear"
+            cur.clearedAt = tick()
+            if H.FFDebug then print(("[houhou] ff %s CLEAR"):format(plr.Name)) end
+        end)
     end
 
     for _, p in ipairs(H.Players:GetPlayers()) do
@@ -373,7 +402,7 @@ do
         p.CharacterAdded:Connect(function(c) markSpawn(p, c) end)
     end)
 
-    function H.HasForceField(plr)
+    function H._ffOld(plr)
         if not plr then return false end
         local c = plr.Character
         if not c then return false end
@@ -383,6 +412,62 @@ do
             return true
         end
         return (tick() - e.t) < (H.SPAWN_SHIELD or 0.95)
+    end
+
+    function H._ffEval(plr)
+        if not plr then return false end
+        local c = plr.Character
+        if not c then return false end
+
+        local e = H._ffCache[plr]
+        if not e or e.char ~= c then
+            markSpawn(plr, c)
+            return true
+        end
+
+        if e.phase == "shield" then return true end
+        if e.phase == "clear" then
+            if e.clearedAt and (tick() - e.clearedAt) < (H.FF_TAIL or 1.4) then return true end
+            return false
+        end
+
+        if c:FindFirstChildOfClass("ForceField") then
+            e.phase = "shield"
+            e.armedAt = tick()
+            return true
+        end
+
+        local waited = tick() - e.t
+        if waited < (H.FF_WAIT or 0.5) then return true end
+
+        if plr ~= LocalPlayer and waited < (H.FF_LOAD_MAX or 6) then
+            local mirror = H.Workspace:FindFirstChild("Players")
+            if mirror and c.Parent ~= mirror then return true end
+        end
+
+        local be = c:FindFirstChild("BodyEffects")
+        if be then
+            for _, n in ipairs(H._ffTrueFlags) do
+                local v = be:FindFirstChild(n)
+                if v and v:IsA("ValueBase") and v.Value == true then return true end
+            end
+        end
+
+        e.phase = "clear"
+        e.clearedAt = e.clearedAt or tick()
+        return false
+    end
+
+    function H.HasForceField(plr)
+        local held = H._ffEval(plr)
+        if H.FFDebug and plr then
+            local prev = H._ffState[plr]
+            if prev ~= held then
+                H._ffState[plr] = held
+                print(("[houhou] ff %s -> %s"):format(plr.Name, tostring(held)))
+            end
+        end
+        return held
     end
 
     function H.GetTargetPart(plr, partName)
@@ -750,6 +835,17 @@ do
                 local h = plr.Character:FindFirstChildOfClass("Humanoid")
                 if h and h.Health < (H.Flags.AimbotMinHealth or 0) then return false end
             end
+            local method = H.Flags.AimbotMethod or "Closest to Mouse"
+            if type(method) == "table" then method = method[1] end
+            if method == "FOV" then
+                local part = H.GetTargetPart(plr, H.Flags.AimbotHitPart or "Head")
+                if part then
+                    local sp, onScreen = H.WorldToScreen(part.Position)
+                    if not onScreen or (sp - Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)).Magnitude > (H.Flags.AimbotFOV or 120) then
+                        return false
+                    end
+                end
+            end
             return true
         end
 
@@ -766,13 +862,20 @@ do
 
         if not (H.Flags.AimbotStickyAim and H.Target) then
             local method = H.Flags.AimbotMethod or "Closest to Mouse"
+            if type(method) == "table" then method = method[1] end
             local closest, best = nil, math.huge
             local mouse = H.GetMousePos()
             local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+            local fovR = (method == "FOV") and (H.Flags.AimbotFOV or 120) or nil
+            local function InFOV(pos)
+                if not fovR then return true end
+                local sp, onScreen = H.WorldToScreen(pos)
+                return onScreen and (sp - center).Magnitude <= fovR
+            end
             for _, plr in ipairs(H._snap) do
                 if plr ~= LocalPlayer and PassesChecks(plr) then
                     local part = H.GetTargetPart(plr, H.Flags.AimbotHitPart or "Head")
-                    if part then
+                    if part and InFOV(part.Position) then
                         local d
                         if method == "Closest Distance" then
                             d = (Camera.CFrame.Position - part.Position).Magnitude
@@ -3100,15 +3203,181 @@ do
         return true
     end
 
+    H._ammoMax = setmetatable({}, { __mode = "k" })
+    H._ammoCapNames = { "MaxAmmo", "MaxAmmoValue", "Clip", "MagSize", "AmmoCapacity" }
+
+    function H.FindToolByName(name)
+        local char = LocalPlayer.Character
+        local t = char and char:FindFirstChild(name)
+        if t and t:IsA("Tool") then return t end
+        local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+        t = bp and bp:FindFirstChild(name)
+        if t and t:IsA("Tool") then return t end
+        return nil
+    end
+
+    function H.GetToolAmmo(tool)
+        if not tool or typeof(tool) ~= "Instance" then return nil end
+        local a = tool:FindFirstChild("Ammo")
+        if not a or not a:IsA("ValueBase") then return nil end
+        local v = tonumber(a.Value)
+        if not v then return nil end
+        local max
+        for _, n in ipairs(H._ammoCapNames) do
+            local c = tool:FindFirstChild(n)
+            if c and c:IsA("ValueBase") then
+                local cv = tonumber(c.Value)
+                if cv and cv > 0 then max = cv break end
+            end
+        end
+        if not max then
+            local seen = H._ammoMax[tool]
+            if not seen or v > seen then seen = v end
+            H._ammoMax[tool] = seen
+            max = seen
+        end
+        return v, max, a
+    end
+
+    function H.GetAmmoCount(name)
+        local tool = H.FindToolByName(name)
+        return tool and H.GetToolAmmo(tool) or nil
+    end
+
+    function H.NeedsReload(tool)
+        local v, max = H.GetToolAmmo(tool)
+        if v == nil then return false end
+        if v <= 0 then return true end
+        if not max or max <= 0 then return false end
+        if string.find(string.lower(tool.Name), "tactical", 1, true) and max > 2 then
+            return v <= (max - 2)
+        end
+        return false
+    end
+
+    function H.AmmoBelowFull(tool)
+        local v, max = H.GetToolAmmo(tool)
+        return v ~= nil and max ~= nil and max > 0 and v < max
+    end
+
+    H._cashObj = nil
+
+    function H.GetCash()
+        local c = H._cashObj
+        if c and c.Parent then
+            local v = c.Value
+            if type(v) == "number" then return v end
+        end
+        H._cashObj = nil
+        local pf = H.Workspace:FindFirstChild("Players")
+        pf = pf and pf:FindFirstChild(LocalPlayer.Name)
+        if pf then
+            local df = pf:FindFirstChild("DataFolder")
+            local cur = df and df:FindFirstChild("Currency3")
+            if cur and type(cur.Value) == "number" then H._cashObj = cur return cur.Value end
+            for _, d in ipairs(pf:GetDescendants()) do
+                if d.Name == "Currency3" and type(d.Value) == "number" then
+                    H._cashObj = d
+                    return d.Value
+                end
+            end
+        end
+        local ls = LocalPlayer:FindFirstChild("leaderstats")
+        if ls then
+            for _, n in ipairs({ "Currency3", "Cash", "Money" }) do
+                local v = ls:FindFirstChild(n)
+                if v and type(v.Value) == "number" then H._cashObj = v return v.Value end
+            end
+        end
+        for _, n in ipairs({ "Currency3", "Cash", "Money" }) do
+            local v = LocalPlayer:FindFirstChild(n)
+            if v and type(v.Value) == "number" then H._cashObj = v return v.Value end
+        end
+        return nil
+    end
+
+    H.RageStompCash = {}
+
+    H._cashBind = nil
+    H._cashBindObj = nil
+
+    function H.RageStompWatch()
+        local c = H._cashObj
+        if not c or c == H._cashBindObj then return end
+        if H._cashBind then pcall(function() H._cashBind:Disconnect() end) end
+        H._cashBindObj = c
+        H._cashBind = c:GetPropertyChangedSignal("Value"):Connect(function()
+            local cash = c.Value
+            if type(cash) ~= "number" then return end
+            local now = tick()
+            for plr, e in pairs(H.RageStompCash) do
+                if not e.paid and e.at and (cash - e.at) >= (H.CFG.RAGE_CASH_MIN or 100000) then
+                    e.paid = true
+                    e.paidAt = now
+                    if H.StompDebug then print(("[houhou] %s paid +%d"):format(plr.Name, math.floor(cash - e.at))) end
+                end
+            end
+        end)
+    end
+
+    function H.RageStompBegin(plr)
+        local e = H.RageStompCash[plr]
+        if not e then
+            e = { at = H.GetCash(), first = tick(), paid = false }
+            H.RageStompWatch()
+            H.RageStompCash[plr] = e
+        end
+        return e
+    end
+
+    function H.RageStompCheck(plr)
+        local e = H.RageStompCash[plr]
+        if not e then return false end
+        if e.paid then return true end
+        local now = tick()
+        local cash = H.GetCash()
+        if cash and e.at and (cash - e.at) >= (H.CFG.RAGE_CASH_MIN or 100000) then
+            e.paid = true
+            e.paidAt = now
+            if H.StompDebug then print(("[houhou] %s paid +%d"):format(plr.Name, math.floor(cash - e.at))) end
+            return true
+        end
+        if now - e.first >= (H.CFG.RAGE_CASH_TIMEOUT or 2.5) then
+            e.paid = true
+            e.paidAt = now
+            if H.StompDebug then print(("[houhou] %s stomp timeout"):format(plr.Name)) end
+            return true
+        end
+        return false
+    end
+
+    H._topUpLast = 0
+
+    function H.RageAnyShootable()
+        for plr in pairs(H.RageTargets) do
+            if plr and plr.Parent and H.RageCanShoot(plr) then return true end
+        end
+        return false
+    end
+
+    function H.RageTopUp()
+        if not H.Flags.RageAutoKill then return end
+        local now = tick()
+        if now - H._topUpLast < 0.4 then return end
+        local gun = H.RageFindGun()
+        if not gun then return end
+        if not H.NeedsReload(gun) then return end
+        H._topUpLast = now
+        H.TriggerReloadTool(gun)
+    end
+
     function H.TriggerReloadTool(tool)
         if not tool then return false end
         if H.Flags.RageAutoKill and H.Flags.RageAutoReload == false and not H.Flags.AutoFight and not H.sentryEngaged then
             return false
         end
-        local ammo = tool:FindFirstChild("Ammo")
-        local cap = tool:FindFirstChild("MaxAmmo") or tool:FindFirstChild("MaxAmmoValue") or tool:FindFirstChild("Clip") or tool:FindFirstChild("MagSize") or tool:FindFirstChild("AmmoCapacity")
-        local maxValue = cap and tonumber(cap.Value) or (ammo and tonumber(ammo.Value)) or 0
-        if ammo and maxValue > 0 and ammo.Value ~= maxValue then
+        local _, maxValue, ammo = H.GetToolAmmo(tool)
+        if ammo and maxValue and maxValue > 0 and ammo.Value ~= maxValue then
             ammo.Value = maxValue
         end
         if H.MainRemote then
@@ -3193,11 +3462,6 @@ do
         local origin = handle.Position
         local dir = (aimPos - origin).Unit
 
-        local ammo = gun:FindFirstChild("Ammo")
-        if ammo and ammo.Value <= 0 then
-            H.TriggerReloadTool(gun)
-            return false
-        end
         local ok = pcall(function()
             if H.RageIsShotgun(gun) then
                 local pellets = {}
@@ -3211,7 +3475,11 @@ do
             end
         end)
 
-        if ok then H.TriggerReloadTool(gun) end
+        task.delay(0.06, function()
+            local av, am = H.GetToolAmmo(gun)
+            if H.AmmoDebug then print(("[houhou] %s ammo %s/%s"):format(gun.Name, tostring(av), tostring(am))) end
+            if H.NeedsReload(gun) then H.TriggerReloadTool(gun) end
+        end)
         return ok
     end
 
@@ -3252,13 +3520,6 @@ do
             return false
         end
 
-        local Ammo = gun:FindFirstChild("Ammo")
-        if Ammo and Ammo.Value <= 0 then
-            H.TriggerReloadTool(gun)
-            if not previousSilent then H.Flags.SilentAimEnabled = false end
-            return false
-        end
-
         local dmgObj = gun:FindFirstChild("Damage") or gun:FindFirstChild("damage")
         local damage = (dmgObj and dmgObj.Value) or gun:GetAttribute("Damage") or 30
         local rangeObj = gun:FindFirstChild("Range")
@@ -3282,11 +3543,14 @@ do
             end
         end)
 
+        task.delay(0.06, function()
+            local av, am = H.GetToolAmmo(gun)
+            if H.AmmoDebug then print(("[houhou] %s ammo %s/%s"):format(gun.Name, tostring(av), tostring(am))) end
+            if av ~= nil and av <= 0 then H.TriggerReloadTool(gun) end
+        end)
         task.delay(0.15, function()
             if not previousSilent then H.Flags.SilentAimEnabled = false end
         end)
-
-        if ok then H.TriggerReloadTool(gun) end
         return ok
     end
 
@@ -3360,8 +3624,10 @@ do
         end)
         if not arrived then return end
         lock.arrivedAt = lock.arrivedAt or now
-        if not lock.lastStomp or now - lock.lastStomp >= 0.1 then
+        local paid = H.RageStompCheck(lock.plr)
+        if not paid and (not lock.lastStomp or now - lock.lastStomp >= 0.06) then
             lock.lastStomp = now
+            H.RageStompBegin(lock.plr)
             local char = lock.plr.Character
             if char and H.MainRemote then
                 pcall(function()
@@ -3371,7 +3637,14 @@ do
                 end)
             end
         end
-        if not H.IsAlive(lock.plr) or now - lock.arrivedAt > 0.7 then
+        local e = H.RageStompCash[lock.plr]
+        if paid and e and e.paidAt and now - e.paidAt >= 0.15 then
+            return endTPLock()
+        end
+        if not H.IsAlive(lock.plr) and now - lock.arrivedAt > 1.2 then
+            return endTPLock()
+        end
+        if now - lock.arrivedAt > (H.CFG.RAGE_CASH_TIMEOUT or 2.5) then
             endTPLock()
         end
     end
@@ -3417,9 +3690,11 @@ do
         if not H.Flags.RageAutoStomp or not H.Flags.RageAutoKill or not H.MainRemote then return end
         if H.WLIgnore(plr) then return end
         if not H.RageConfirmedDown(plr) then return end
+        if H.RageStompCheck(plr) then return end
         local now = tick()
-        if H.RageLastStomp[plr] and now - H.RageLastStomp[plr] < 0.6 then return end
+        if H.RageLastStomp[plr] and now - H.RageLastStomp[plr] < 0.2 then return end
         H.RageLastStomp[plr] = now
+        H.RageStompBegin(plr)
         pcall(function()
             H.MainRemote:FireServer("Stomp")
             H.MainRemote:FireServer("StompPlayer", plr.Character)
@@ -3434,7 +3709,8 @@ do
         H.RageLastStompAll = now
         for _, plr in ipairs(H._snap) do
             if plr ~= LocalPlayer and not H.WLIgnore(plr) then
-                if H.RageConfirmedDown(plr) then
+                if H.RageConfirmedDown(plr) and not H.RageStompCheck(plr) then
+                    H.RageStompBegin(plr)
                     pcall(function()
                         H.MainRemote:FireServer("Stomp")
                         H.MainRemote:FireServer("StompPlayer", plr.Character)
@@ -3766,6 +4042,7 @@ do
             H.RageTargetReady[plr] = nil
             H.RageWaitingRespawn[plr] = nil
             H.RageTPLast[plr] = nil
+            H.RageStompCash[plr] = nil
         end
         for plr in pairs(newList) do
             if not H.RageTargets[plr] then
@@ -3850,7 +4127,7 @@ _Players.PlayerAdded:Connect(function(p)
     p.CharacterAdded:Connect(function() markSpawn(p) end)
 end)
 
-local function hasForceField(plr)
+local function hasForceField_old(plr)
     if not plr then return true end
     local char = plr.Character
     if not char then return true end
@@ -3865,6 +4142,9 @@ local function hasForceField(plr)
     end
     return false
 end
+        local function hasForceField(plr)
+            return H.HasForceField(plr)
+        end
         local function findGun()
             local char = Services_LocalPlayer.Character
             if not char then return nil end
@@ -3979,13 +4259,12 @@ end
             if not hitbox then return false end
             local aimPos = getAimPosition(hitbox)
             if not aimPos then return false end
-            local ammo = gun:FindFirstChild("Ammo")
-            if ammo and ammo.Value <= 0 then
-                H.TriggerReloadTool(gun)
-                return false
-            end
             local ok = fireGun(gun, hitbox, gun.Handle.Position, aimPos)
-            if ok then H.TriggerReloadTool(gun) end
+            task.delay(0.06, function()
+                local av, am = H.GetToolAmmo(gun)
+                if H.AmmoDebug then print(("[houhou] %s ammo %s/%s"):format(gun.Name, tostring(av), tostring(am))) end
+                if av ~= nil and av <= 0 then H.TriggerReloadTool(gun) end
+            end)
             return ok
         end
         function H.DirectShoot(plr, gun)
@@ -4309,6 +4588,29 @@ do
         H.RageTargetOriginalCF = {}
         H.RageTPLast = {}
         H.RageLastStomp = {}
+        H._ffState = {}
+        H.RageStompCash = {}
+    H._cashBind = nil
+    H._cashBindObj = nil
+
+    function H.RageStompWatch()
+        local c = H._cashObj
+        if not c or c == H._cashBindObj then return end
+        if H._cashBind then pcall(function() H._cashBind:Disconnect() end) end
+        H._cashBindObj = c
+        H._cashBind = c:GetPropertyChangedSignal("Value"):Connect(function()
+            local cash = c.Value
+            if type(cash) ~= "number" then return end
+            local now = tick()
+            for plr, e in pairs(H.RageStompCash) do
+                if not e.paid and e.at and (cash - e.at) >= (H.CFG.RAGE_CASH_MIN or 100000) then
+                    e.paid = true
+                    e.paidAt = now
+                    if H.StompDebug then print(("[houhou] %s paid +%d"):format(plr.Name, math.floor(cash - e.at))) end
+                end
+            end
+        end)
+    end
         H.RageTPQueue = nil
         if H.sentryVoided then H.SentryReturnHome() end
         if H.RageSpectateConn then
@@ -4464,28 +4766,7 @@ do
     end
 
     local function farmCash()
-        local pf = workspace:FindFirstChild("Players")
-        pf = pf and pf:FindFirstChild(LocalPlayer.Name)
-        if pf then
-            local df = pf:FindFirstChild("DataFolder")
-            local c = df and df:FindFirstChild("Currency3")
-            if c and type(c.Value) == "number" then return c.Value end
-            for _, d in ipairs(pf:GetDescendants()) do
-                if d.Name == "Currency3" and type(d.Value) == "number" then return d.Value end
-            end
-        end
-        local ls = LocalPlayer:FindFirstChild("leaderstats")
-        if ls then
-            for _, n in ipairs({ "Currency3", "Cash", "Money" }) do
-                local v = ls:FindFirstChild(n)
-                if v and type(v.Value) == "number" then return v.Value end
-            end
-        end
-        for _, n in ipairs({ "Currency3", "Cash", "Money" }) do
-            local v = LocalPlayer:FindFirstChild(n)
-            if v and type(v.Value) == "number" then return v.Value end
-        end
-        return nil
+        return H.GetCash()
     end
 
     local function farmSafeToTP(plr)
@@ -4669,14 +4950,12 @@ do
             and now - Farm.lastKill >= FARM_FIRE_RATE then
             local gun = farmGetGun()
             if gun then
-                local ammo = gun:FindFirstChild("Ammo")
-                if ammo and ammo.Value <= 0 then
-                    H.TriggerReloadTool(gun)
-                else
-                    if H.DirectShoot(plr, gun) then
-                        Farm.lastKill = now
-                        H.TriggerReloadTool(gun)
-                    end
+                if H.NeedsReload(gun) then H.TriggerReloadTool(gun) end
+                if H.DirectShoot(plr, gun) then
+                    Farm.lastKill = now
+                    task.delay(0.06, function()
+                        if H.NeedsReload(gun) then H.TriggerReloadTool(gun) end
+                    end)
                 end
             end
         end
@@ -4905,7 +5184,7 @@ do
         FOVSection:Toggle({ Name = "Show FOV", Flag = "AimbotShowFOV", Default = true, Callback = function(v) H_.Flags.AimbotShowFOV = v end })
         FOVSection:Slider({ Name = "FOV Radius", Flag = "AimbotFOV", Min = 10, Max = 500, Default = 120, Callback = function(v) H_.Flags.AimbotFOV = v end })
         FOVSection:ColorPicker({ Name = "FOV Color", Flag = "AimbotFOVColor", Default = Color3.new(1, 1, 1) })
-        FOVSection:Toggle({ Name = "Use FOV", Flag = "AimbotUseFOV", Default = true, Callback = function(v) H_.Flags.AimbotUseFOV = v end })
+        
 
         local SmoothSection = AimbotTab:Section("Aimbot Smoothing")
         SmoothSection:Toggle({ Name = "Enable Smoothing", Flag = "AimbotSmoothing", Default = true, Callback = function(v) H_.Flags.AimbotSmoothing = v end })
@@ -9193,11 +9472,17 @@ do
             end
         end
 
+        if H.Flags.RageAutoKill and not H.RageAnyShootable() then
+            pcall(H.RageTopUp)
+        end
+
         for plr, _ in pairs(H.RageTargets) do
             if plr and plr.Parent and plr ~= LocalPlayer then
                 if H.RageConfirmedDown(plr) then
                     H.RageTryTP(plr)
                     H.RageTryStomp(plr)
+                else
+                    H.RageStompCash[plr] = nil
                 end
             end
         end
@@ -9327,6 +9612,7 @@ do
         H.RemoveESP(plr)
         H._koCache[plr] = nil
         H._ffCache[plr] = nil
+        H._ffState[plr] = nil
         H.TracerObjects[plr] = nil
         local oo = H.OffscreenObjects[plr]
         if oo then
@@ -9347,6 +9633,7 @@ do
         H.RageTargetOriginalCF[plr] = nil
         H.RageTPLast[plr] = nil
         H.RageLastStomp[plr] = nil
+        H.RageStompCash[plr] = nil
     end))
 
     H.AddConn(LocalPlayer.CharacterAdded:Connect(function(char)
@@ -9363,6 +9650,8 @@ do
         H.Target = nil
         H.SilentCachedPart = nil
         H.RageTPQueue = nil
+        H._cashObj = nil
+        H.RageStompCash = {}
         task.wait(0.4)
         if H.Flags.AnimPack and H.Flags.AnimPack ~= "Default" then
             task.wait(0.2)
@@ -9378,6 +9667,9 @@ do
         end
         if H.Flags.FlyEnabled then H.StartFly() end
         if H.Flags.Anchor then H.ApplyAnchor() end
+        for _, t in ipairs(char:GetChildren()) do
+            if t:IsA("Tool") then pcall(H.GetToolAmmo, t) end
+        end
         if H.Flags.RapidFire then H.ScanRapidFireTools() end
         if H.Flags.HitboxEnabled then H.ApplyHitbox() end
         if H.Flags.ESPEnabled then
@@ -9404,6 +9696,7 @@ do
             H.AddConn(c.ChildAdded:Connect(function(t)
                 H._rfDirty = true
                 H.InvalidateSentryGuns()
+                if t:IsA("Tool") then pcall(H.GetToolAmmo, t) end
                 if t:IsA("Tool") and H.Flags.RapidFire then H.HardenTool(t) end
             end))
             H.AddConn(c.ChildRemoved:Connect(function()
